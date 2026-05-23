@@ -2855,15 +2855,6 @@ function liquidateAll() {
   state.levHoldings = {};
 }
 
-function goHome() {
-  liquidateAll();
-  autoSave();
-  closeSettings();
-  clearInterval(tickTimer); clearTimeout(newsTimer);
-  document.getElementById('home-screen').style.display = 'flex';
-  document.getElementById('home-screen').classList.remove('fade-out');
-}
-
 async function doSwitchAccount() {
   const email = document.getElementById('switch-email').value.trim();
   const pw    = document.getElementById('switch-pw').value;
@@ -3364,14 +3355,12 @@ function initAuth() {
 // BOOT
 // ═══════════════════════════════════════════════
 let isMaster = false;
+let subsInitialized = false; // 구독 중복 방지 플래그
 
 function startMasterMode() {
   if (isMaster) return;
   isMaster = true;
   showToast('buy', '👑 마스터 선출됨 — 시세 생성 중');
-  // 장 시작시간 Firebase에 기록
-  dayStartTime = Date.now();
-  if (window._fbPushDayStart) window._fbPushDayStart(dayStartTime).catch(()=>{});
   clearInterval(tickTimer);
   tickTimer = setInterval(tickPrices, 3000);
 }
@@ -3380,55 +3369,59 @@ function stopMasterMode() {
   if (!isMaster) return;
   isMaster = false;
   clearInterval(tickTimer);
+  // 마스터 해제 → Firebase에서 master 노드 삭제 → 다음 사람이 자동 인계
+  if (window._fbMasterRef) {
+    try { remove(window._fbMasterRef).catch(()=>{}); } catch(e) {}
+  }
+}
+
+function goHome() {
+  liquidateAll();
+  autoSave();
+  closeSettings();
+  clearInterval(tickTimer);
+  clearTimeout(newsTimer);
+  // 마스터면 해제 → 다음 접속자가 자동 인계
+  if (isMaster) stopMasterMode();
+  document.getElementById('home-screen').style.display = 'flex';
+  document.getElementById('home-screen').classList.remove('fade-out');
 }
 
 function bootGame() {
   initStocks();
   isMaster = false;
 
-  // 장 시작시간 — Firebase에서 먼저 가져옴 (홈복귀 시 기존 시간 유지)
-  if (window._fbSubscribeDayStart) {
-    window._fbSubscribeDayStart((ts) => {
-      if (!isMaster) {
-        dayStartTime = ts; // 항상 마스터 기준 시간으로 동기화
-      }
-    });
-  }
+  // 구독은 최초 1회만 등록
+  if (!subsInitialized) {
+    subsInitialized = true;
 
-  // Firebase에서 현재 dayStart 즉시 가져오기
-  if (window._fbGetDayStart) {
-    window._fbGetDayStart().then(ts => {
-      if (ts) dayStartTime = ts;
-      else dayStartTime = Date.now();
-    }).catch(() => { dayStartTime = Date.now(); });
-  } else {
-    dayStartTime = Date.now();
-  }
+    // 장 시작시간 구독
+    if (window._fbSubscribeDayStart) {
+      window._fbSubscribeDayStart((ts) => {
+        if (!isMaster) dayStartTime = ts;
+      });
+    }
 
-  // 가격 구독 (항상 — 마스터가 되기 전에도 받을 수 있음)
-  if (window._fbSubscribePrices) {
-    window._fbSubscribePrices((data) => {
-      if (isMaster) return;
-      if (!data || !data.prices) return;
-      const elapsed = Date.now() - dayStartTime;
-      const progress = Math.min(elapsed / DAY_MS, 1);
-      const totalMins = 390;
-      const minEl = Math.floor(progress * totalMins);
-      const h = 9 + Math.floor(minEl / 60);
-      const m = minEl % 60;
-      const label = h + ':' + String(m).padStart(2,'0');
+    // 가격 구독
+    if (window._fbSubscribePrices) {
+      window._fbSubscribePrices((data) => {
+        if (isMaster) return;
+        if (!data || !data.prices) return;
+        const elapsed = Date.now() - dayStartTime;
+        const progress = Math.min(elapsed / DAY_MS, 1);
+        const minEl = Math.floor(progress * 390);
+        const h = 9 + Math.floor(minEl / 60);
+        const m = minEl % 60;
+        const label = h + ':' + String(m).padStart(2,'0');
 
-      // 분할 처리 (일반 유저)
-      const splits = data.splits || {};
-      Object.entries(splits).forEach(([id, ratio]) => {
-        const s = stocks[id];
-        if (!s) return;
-        // 이미 분할된 가격인지 체크 (현재가가 분할 후 가격보다 크면 아직 반영 안 된 것)
-        if (s.price > 2000000) {
+        // 분할 처리
+        const splits = data.splits || {};
+        Object.entries(splits).forEach(([id, ratio]) => {
+          const s = stocks[id];
+          if (!s || s.price <= 2000000) return;
           s.history = s.history.map(p => Math.round(p / ratio));
           s.intradayHist = s.intradayHist.map(hh => ({ ...hh, price: Math.round(hh.price / ratio) }));
           s.openPrice = Math.round(s.openPrice / ratio);
-          // 보유자 수량 조정
           const qty = state.holdings[id] || 0;
           if (qty > 0) {
             state.holdings[id] = qty * ratio;
@@ -3437,57 +3430,68 @@ function bootGame() {
           Object.values(state.levHoldings || {}).forEach(pos => {
             if (pos.stockId === id) pos.avgCost = Math.round(pos.avgCost / ratio);
           });
-          const name = STOCK_DEF.find(d => d.id === id)?.name || id;
-          showToast('buy', `📊 ${name} 주식분할 (1/10) — 수량 10배`);
-        }
-      });
+          showToast('buy', `📊 ${STOCK_DEF.find(d=>d.id===id)?.name||id} 주식분할 (1/10)`);
+        });
 
-      STOCK_DEF.forEach(def => {
-        const newPrice = data.prices[def.id];
-        if (!newPrice) return;
-        const s = stocks[def.id];
-        s.price = newPrice;
-        s.history.push(newPrice);
-        s.intradayHist.push({ price: newPrice, label });
-        if (s.intradayHist.length > 500) s.intradayHist.shift();
+        STOCK_DEF.forEach(def => {
+          const newPrice = data.prices[def.id];
+          if (!newPrice) return;
+          const s = stocks[def.id];
+          s.price = newPrice;
+          s.history.push(newPrice);
+          s.intradayHist.push({ price: newPrice, label });
+          if (s.intradayHist.length > 500) s.intradayHist.shift();
+        });
+        refreshUI();
       });
-      refreshUI();
-    });
+    }
+
+    // 마스터 감시 — 마스터 없으면 자동 선출
+    if (window._fbWatchMaster && currentUser) {
+      window._fbWatchMaster(
+        currentUser.uid,
+        () => startMasterMode(),
+        () => stopMasterMode()
+      );
+    }
   }
 
-  // 마감 카운트다운 타이머 (모든 유저)
+  // 장 시작시간 — Firebase에서 가져오기 (홈복귀 시 기존 시간 유지)
+  if (window._fbGetDayStart) {
+    window._fbGetDayStart().then(ts => {
+      dayStartTime = ts || Date.now();
+      // 마스터 없으면 새로 설정
+      if (isMaster && !ts) {
+        window._fbPushDayStart(dayStartTime).catch(()=>{});
+      }
+    }).catch(() => { dayStartTime = Date.now(); });
+  } else {
+    dayStartTime = Date.now();
+  }
+
+  // 카운트다운 타이머 (매 게임 시작마다 새로 등록)
+  clearInterval(tickTimer);
   const countdownTimer = setInterval(() => {
     const elapsed = Date.now() - dayStartTime;
     const progress = Math.min(elapsed / DAY_MS, 1);
-    const totalMins = 390;
-    const minEl = Math.floor(progress * totalMins);
+    const minEl = Math.floor(progress * 390);
     const h = 9 + Math.floor(minEl / 60);
     const m = minEl % 60;
-    document.getElementById('day-bar-fill').style.width = (progress * 100) + '%';
-    document.getElementById('bar-time').textContent = h + ':' + String(m).padStart(2,'0');
+    const el = document.getElementById('day-bar-fill');
+    const bt = document.getElementById('bar-time');
+    const cdEl = document.getElementById('countdown');
+    if (!cdEl) { clearInterval(countdownTimer); return; }
+    if (el) el.style.width = (progress * 100) + '%';
+    if (bt) bt.textContent = h + ':' + String(m).padStart(2,'0');
     const remainMs = Math.max(0, DAY_MS - elapsed);
     const remMin = Math.floor(remainMs / 60000);
     const remSec = Math.floor((remainMs % 60000) / 1000);
-    const cdEl = document.getElementById('countdown');
-    if (!cdEl) return;
     cdEl.textContent = String(remMin).padStart(2,'0') + ':' + String(remSec).padStart(2,'0');
     if (remMin < 1) { cdEl.style.color='var(--red)'; cdEl.style.textShadow='0 0 14px rgba(255,61,90,.5)'; }
     else if (remMin < 3) { cdEl.style.color='var(--amber)'; cdEl.style.textShadow='0 0 14px rgba(255,214,0,.4)'; }
     else { cdEl.style.color='var(--accent)'; cdEl.style.textShadow='0 0 14px rgba(0,200,255,.45)'; }
     if (progress >= 1) { clearInterval(countdownTimer); if (!isMaster) endDay(); }
   }, 1000);
-
-  // 마스터 자동 선출 시도
-  if (window._fbWatchMaster && currentUser) {
-    window._fbWatchMaster(
-      currentUser.uid,
-      () => startMasterMode(),   // 마스터 됨
-      () => stopMasterMode()     // 마스터 잃음
-    );
-  } else {
-    // Firebase 미연결 fallback
-    startMasterMode();
-  }
 
   scheduleNews();
   generateNews();
