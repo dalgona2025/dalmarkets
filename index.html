@@ -882,6 +882,15 @@ window._fbSubscribeDayStart = (callback) => {
   });
 };
 
+// 장 시작시간 1회 읽기
+window._fbGetDayStart = async () => {
+  const snap = await get(dayStartRef);
+  return snap.exists() ? snap.val().ts : null;
+};
+
+// masterRef 전역 노출 (nextDay에서 사용)
+window._fbMasterRef = masterRef;
+
 // 가격 구독 (일반 유저)
 window._fbSubscribePrices = (callback) => {
   onValue(pricesRef, (snap) => {
@@ -2517,7 +2526,7 @@ function endDay() {
   uploadRanking();
 }
 
-function nextDay() {
+async function nextDay() {
   document.getElementById('modal-overlay').classList.remove('show');
   state.prevDayTotal = getTotalAsset();
   gameDay++;
@@ -2531,11 +2540,23 @@ function nextDay() {
     stocks[def.id].prevClose = stocks[def.id].price;
     stocks[def.id].intradayHist = [{ price:stocks[def.id].price, label:'09:00' }];
   });
-  dayStartTime = Date.now();
-  // 마스터면 새 장 시작시간 Firebase에 기록
-  if (isMaster && window._fbPushDayStart) window._fbPushDayStart(dayStartTime).catch(()=>{});
-  clearInterval(tickTimer);
-  tickTimer = setInterval(tickPrices, 3000);
+
+  // 가장 먼저 nextDay 누른 사람이 마스터 선출
+  const newStart = Date.now();
+  if (window._fbPushDayStart) {
+    try {
+      // master 자리 선점 시도
+      await set(window._fbMasterRef || masterRef, { uid: currentUser?.uid || 'guest', ts: newStart });
+      onDisconnect(window._fbMasterRef || masterRef).remove();
+      isMaster = true;
+      clearInterval(tickTimer);
+      tickTimer = setInterval(tickPrices, 3000);
+      showToast('buy', '👑 마스터 선출됨 — 새 장 시작');
+    } catch(e) {}
+    await window._fbPushDayStart(newStart).catch(()=>{});
+  }
+
+  dayStartTime = newStart;
   scheduleNews();
   generateNews();
   updateNewsBadge();
@@ -3363,15 +3384,25 @@ function stopMasterMode() {
 
 function bootGame() {
   initStocks();
-  dayStartTime = Date.now();
   isMaster = false;
 
-  // 장 시작시간 구독 (일반 유저 — 마스터 기준으로 동기화)
+  // 장 시작시간 — Firebase에서 먼저 가져옴 (홈복귀 시 기존 시간 유지)
   if (window._fbSubscribeDayStart) {
     window._fbSubscribeDayStart((ts) => {
-      if (isMaster) return; // 마스터는 자기 시간 사용
-      dayStartTime = ts;
+      if (!isMaster) {
+        dayStartTime = ts; // 항상 마스터 기준 시간으로 동기화
+      }
     });
+  }
+
+  // Firebase에서 현재 dayStart 즉시 가져오기
+  if (window._fbGetDayStart) {
+    window._fbGetDayStart().then(ts => {
+      if (ts) dayStartTime = ts;
+      else dayStartTime = Date.now();
+    }).catch(() => { dayStartTime = Date.now(); });
+  } else {
+    dayStartTime = Date.now();
   }
 
   // 가격 구독 (항상 — 마스터가 되기 전에도 받을 수 있음)
