@@ -2525,14 +2525,42 @@ function endDay() {
   uploadRanking();
 }
 
+function startCountdown() {
+  clearInterval(window._countdownTimer);
+  window._countdownTimer = setInterval(() => {
+    const elapsed = Date.now() - dayStartTime;
+    const progress = Math.min(elapsed / DAY_MS, 1);
+    const minEl = Math.floor(progress * 390);
+    const h = 9 + Math.floor(minEl / 60);
+    const m = minEl % 60;
+    const el = document.getElementById('day-bar-fill');
+    const bt = document.getElementById('bar-time');
+    const cdEl = document.getElementById('countdown');
+    if (!cdEl) { clearInterval(window._countdownTimer); return; }
+    if (el) el.style.width = (progress * 100) + '%';
+    if (bt) bt.textContent = h + ':' + String(m).padStart(2,'0');
+    const remainMs = Math.max(0, DAY_MS - elapsed);
+    const remMin = Math.floor(remainMs / 60000);
+    const remSec = Math.floor((remainMs % 60000) / 1000);
+    cdEl.textContent = String(remMin).padStart(2,'0') + ':' + String(remSec).padStart(2,'0');
+    if (remMin < 1) { cdEl.style.color='var(--red)'; cdEl.style.textShadow='0 0 14px rgba(255,61,90,.5)'; }
+    else if (remMin < 3) { cdEl.style.color='var(--amber)'; cdEl.style.textShadow='0 0 14px rgba(255,214,0,.4)'; }
+    else { cdEl.style.color='var(--accent)'; cdEl.style.textShadow='0 0 14px rgba(0,200,255,.45)'; }
+    if (progress >= 1) {
+      clearInterval(window._countdownTimer);
+      clearInterval(tickTimer);
+      clearTimeout(newsTimer);
+      endDay();
+    }
+  }, 1000);
+}
 async function nextDay() {
   document.getElementById('modal-overlay').classList.remove('show');
   state.prevDayTotal = getTotalAsset();
   gameDay++;
   tickCount = 0;
   document.getElementById('day-num').textContent = gameDay;
-  newsFeed = [];
-  pendingImpacts = {};
+  newsFeed = []; pendingImpacts = {};
   resetAssetsState();
   STOCK_DEF.forEach(def => {
     stocks[def.id].openPrice = stocks[def.id].price;
@@ -2540,25 +2568,31 @@ async function nextDay() {
     stocks[def.id].intradayHist = [{ price:stocks[def.id].price, label:'09:00' }];
   });
 
-  // 가장 먼저 nextDay 누른 사람이 마스터 선출
+  // 새 장 시작시간 설정
   const newStart = Date.now();
+  dayStartTime = newStart;
+
+  // 가장 먼저 nextDay 누른 사람이 마스터 선출
   if (window._fbPushDayStart) {
     try {
-      // master 자리 선점 시도
-      await set(window._fbMasterRef || masterRef, { uid: currentUser?.uid || 'guest', ts: newStart });
-      onDisconnect(window._fbMasterRef || masterRef).remove();
+      await set(window._fbMasterRef, { uid: currentUser?.uid || 'guest', ts: newStart });
+      onDisconnect(window._fbMasterRef).remove();
       isMaster = true;
-      clearInterval(tickTimer);
-      tickTimer = setInterval(tickPrices, 3000);
       showToast('buy', '👑 마스터 선출됨 — 새 장 시작');
     } catch(e) {}
     await window._fbPushDayStart(newStart).catch(()=>{});
   }
 
-  dayStartTime = newStart;
-  scheduleNews();
-  generateNews();
-  updateNewsBadge();
+  // 마스터면 틱 재시작
+  if (isMaster) {
+    clearInterval(tickTimer);
+    tickTimer = setInterval(tickPrices, 3000);
+  }
+
+  // 카운트다운 재시작
+  startCountdown();
+
+  scheduleNews(); generateNews(); updateNewsBadge();
   if (currentTab==='news') renderNews();
   renderSidebar();
   if (state.currentTicker) renderDetail(state.currentTicker);
@@ -3483,33 +3517,8 @@ function bootGame() {
     }).catch(() => {});
   }
 
-  // 카운트다운 타이머 (매 게임 시작마다 새로 등록)
-  clearInterval(window._countdownTimer);
-  window._countdownTimer = setInterval(() => {
-    const elapsed = Date.now() - dayStartTime;
-    const progress = Math.min(elapsed / DAY_MS, 1);
-    const minEl = Math.floor(progress * 390);
-    const h = 9 + Math.floor(minEl / 60);
-    const m = minEl % 60;
-    const el = document.getElementById('day-bar-fill');
-    const bt = document.getElementById('bar-time');
-    const cdEl = document.getElementById('countdown');
-    if (!cdEl) { clearInterval(window._countdownTimer); return; }
-    if (el) el.style.width = (progress * 100) + '%';
-    if (bt) bt.textContent = h + ':' + String(m).padStart(2,'0');
-    const remainMs = Math.max(0, DAY_MS - elapsed);
-    const remMin = Math.floor(remainMs / 60000);
-    const remSec = Math.floor((remainMs % 60000) / 1000);
-    cdEl.textContent = String(remMin).padStart(2,'0') + ':' + String(remSec).padStart(2,'0');
-    if (remMin < 1) { cdEl.style.color='var(--red)'; cdEl.style.textShadow='0 0 14px rgba(255,61,90,.5)'; }
-    else if (remMin < 3) { cdEl.style.color='var(--amber)'; cdEl.style.textShadow='0 0 14px rgba(255,214,0,.4)'; }
-    else { cdEl.style.color='var(--accent)'; cdEl.style.textShadow='0 0 14px rgba(0,200,255,.45)'; }
-    if (progress >= 1) {
-      clearInterval(window._countdownTimer);
-      if (isMaster) { clearInterval(tickTimer); clearTimeout(newsTimer); endDay(); }
-      else endDay();
-    }
-  }, 1000);
+  // 카운트다운 시작
+  startCountdown();
 
   scheduleNews();
   generateNews();
