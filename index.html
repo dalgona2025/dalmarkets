@@ -2589,7 +2589,7 @@ async function nextDay() {
   // 마스터면 틱 재시작
   if (isMaster) {
     clearInterval(tickTimer);
-    tickTimer = setInterval(tickPrices, 3000);
+    tickTimer = setInterval(tickPrices, 1000);
   }
 
   // 카운트다운 재시작
@@ -3400,7 +3400,7 @@ function startMasterMode() {
   if (badge) badge.style.display = 'block';
   showToast('buy', '👑 마스터 선출됨 — 시세 생성 중');
   clearInterval(tickTimer);
-  tickTimer = setInterval(tickPrices, 3000);
+  tickTimer = setInterval(tickPrices, 1000);
   if (window._fbGetDayStart) {
     window._fbGetDayStart().then(ts => {
       if (!ts) {
@@ -3453,6 +3453,7 @@ function bootGame() {
     // 가격 구독 (1회만)
     if (window._fbSubscribePrices) {
       window._fbSubscribePrices((data) => {
+        console.log('[구독] 가격 수신:', isMaster ? '마스터라 무시' : '처리중', data?.prices ? Object.keys(data.prices).length + '개' : 'null');
         if (isMaster) return;
         if (!data || !data.prices) return;
         const elapsed = Date.now() - dayStartTime;
@@ -3485,7 +3486,7 @@ function bootGame() {
           isMaster = true;
           showToast('buy', '👑 마스터 선출됨');
           clearInterval(tickTimer);
-          tickTimer = setInterval(tickPrices, 3000);
+          tickTimer = setInterval(tickPrices, 1000);
         }
       },
       () => stopMasterMode()
@@ -3495,7 +3496,7 @@ function bootGame() {
   // 홈복귀 시 마스터면 틱 즉시 재시작
   if (isMaster) {
     clearInterval(tickTimer);
-    tickTimer = setInterval(tickPrices, 3000);
+    tickTimer = setInterval(tickPrices, 1000);
   }
 
   // 장 시작시간
