@@ -3436,9 +3436,11 @@ function goHome() {
 }
 
 function bootGame() {
-  // initStocks는 최초 1회만
+  // stocks가 비어있으면 항상 initStocks 실행
+  if (Object.keys(stocks).length === 0) initStocks();
+
+  // 구독은 최초 1회만 등록
   if (!subsInitialized) {
-    initStocks();
     subsInitialized = true;
 
     // 장 시작시간 구독 (1회만)
