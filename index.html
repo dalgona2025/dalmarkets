@@ -1526,7 +1526,6 @@ function tickPrices() {
     }
   }
   // 일반 유저는 _fbSubscribePrices 콜백으로 수신
-
   refreshUI();
 }
 
@@ -3361,6 +3360,21 @@ function startMasterMode() {
   if (isMaster) return;
   isMaster = true;
   showToast('buy', '👑 마스터 선출됨 — 시세 생성 중');
+  // Firebase에 dayStart가 없을 때만 새로 설정
+  if (window._fbGetDayStart) {
+    window._fbGetDayStart().then(ts => {
+      if (!ts) {
+        // 기존 시간 없음 → 새로 설정
+        dayStartTime = Date.now();
+        if (window._fbPushDayStart) window._fbPushDayStart(dayStartTime).catch(()=>{});
+      } else {
+        dayStartTime = ts; // 기존 시간 유지
+      }
+    }).catch(() => {
+      dayStartTime = Date.now();
+      if (window._fbPushDayStart) window._fbPushDayStart(dayStartTime).catch(()=>{});
+    });
+  }
   clearInterval(tickTimer);
   tickTimer = setInterval(tickPrices, 3000);
 }
@@ -3457,16 +3471,11 @@ function bootGame() {
   }
 
   // 장 시작시간 — Firebase에서 가져오기 (홈복귀 시 기존 시간 유지)
+  dayStartTime = Date.now(); // 기본값
   if (window._fbGetDayStart) {
     window._fbGetDayStart().then(ts => {
-      dayStartTime = ts || Date.now();
-      // 마스터 없으면 새로 설정
-      if (isMaster && !ts) {
-        window._fbPushDayStart(dayStartTime).catch(()=>{});
-      }
-    }).catch(() => { dayStartTime = Date.now(); });
-  } else {
-    dayStartTime = Date.now();
+      if (ts) dayStartTime = ts;
+    }).catch(() => {});
   }
 
   // 카운트다운 타이머 (매 게임 시작마다 새로 등록)
