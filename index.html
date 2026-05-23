@@ -881,14 +881,6 @@ window._fbSubscribeDayStart = (callback) => {
     if (snap.exists()) callback(snap.val().ts);
   });
 };
-  await set(pricesRef, {
-    prices: priceMap,
-    gameDay: day,
-    tickCount: tick,
-    splits: splitMap || {},
-    ts: serverTimestamp()
-  });
-};
 
 // 가격 구독 (일반 유저)
 window._fbSubscribePrices = (callback) => {
