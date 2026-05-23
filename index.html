@@ -835,6 +835,19 @@ window._fbLoadRanking = async () => {
 // ── 자동 마스터 선출 시스템 ──
 const masterRef   = ref(rtdb, 'market/master');
 const pricesRef   = ref(rtdb, 'market/prices');
+const newsRef     = ref(rtdb, 'market/news');
+
+// 뉴스 push (마스터만)
+window._fbPushNews = async (newsItem) => {
+  await set(newsRef, { item: newsItem, ts: Date.now() });
+};
+
+// 뉴스 구독 (일반 유저)
+window._fbSubscribeNews = (callback) => {
+  onValue(newsRef, (snap) => {
+    if (snap.exists()) callback(snap.val().item);
+  });
+};
 
 // 마스터 등록 시도 — 없으면 내가 마스터
 window._fbTryBecomeMaster = async (uid) => {
@@ -851,18 +864,20 @@ window._fbTryBecomeMaster = async (uid) => {
 
 // 마스터 변경 감지 — 매번 재등록 가능하게 unsubscribe 반환
 window._fbWatchMaster = (uid, onBecomeMaster, onLoseMaster) => {
-  // 이전 구독 해제
   if (window._masterUnsub) { window._masterUnsub(); window._masterUnsub = null; }
   const unsub = onValue(masterRef, async (snap) => {
     if (!snap.exists()) {
+      // 마스터 없음 → 내가 도전
       try {
         await set(masterRef, { uid, ts: Date.now() });
         onDisconnect(masterRef).remove();
         onBecomeMaster();
       } catch(e) {}
     } else if (snap.val().uid === uid) {
+      // 내가 마스터
       onBecomeMaster();
     } else {
+      // 다른 사람이 마스터 → 나는 일반 유저
       onLoseMaster();
     }
   });
@@ -892,6 +907,17 @@ window._fbGetDayStart = async () => {
 
 // masterRef 전역 노출 (nextDay에서 사용)
 window._fbMasterRef = masterRef;
+
+// 가격 push (마스터) — ts를 매번 다르게 해서 Firebase가 변경으로 인식
+window._fbPushPrices = async (priceMap, day, tick, splitMap) => {
+  await set(pricesRef, {
+    prices: priceMap,
+    gameDay: day,
+    tickCount: tick,
+    splits: splitMap || {},
+    ts: Date.now() // serverTimestamp 대신 클라이언트 시간 — 매번 다름
+  });
+};
 
 // 가격 구독 (일반 유저)
 window._fbSubscribePrices = (callback) => {
@@ -1132,7 +1158,7 @@ setTimeout(() => {
       <div class="hdr-divider"></div>
       <div class="hdr-stat">
         <div class="hdr-stat-label">마감까지</div>
-        <div id="countdown" style="font-family:var(--mono);font-size:16px;font-weight:700;color:var(--accent);letter-spacing:2px;text-shadow:0 0 12px rgba(0,200,255,.4);">01:00</div>
+        <div id="countdown" style="font-family:var(--mono);font-size:16px;font-weight:700;color:var(--accent);letter-spacing:2px;text-shadow:0 0 12px rgba(0,200,255,.4);">10:00</div>
       </div>
       <div id="day-bar-wrap" style="width:100px;">
         <div id="day-bar-label"><span>시작</span><span>마감</span></div>
@@ -1152,7 +1178,6 @@ setTimeout(() => {
       <div class="user-dot"></div>
       <span id="user-email-display">—</span>
     </div>
-    <div id="master-badge" style="display:none;font-family:var(--mono);font-size:10px;color:#000;background:var(--amber);border-radius:4px;padding:3px 8px;letter-spacing:1px;">👑 MASTER</div>
   </div>
 </div>
 
@@ -1279,7 +1304,7 @@ setTimeout(() => {
   <div id="modal">
     <h2>🔔 오늘의 결산</h2>
     <div id="modal-content"></div>
-    <button id="next-day-btn" onclick="nextDay()">다음 날로 →</button>
+    <div id="next-day-countdown" style="text-align:center;margin-top:14px;font-family:var(--mono);font-size:13px;color:var(--muted);"></div>
   </div>
 </div>
 
@@ -1288,7 +1313,7 @@ setTimeout(() => {
 // ═══════════════════════════════════════════════
 // DATA — DAL 종목 (ETF 제외), BULL 뉴스풀
 // ═══════════════════════════════════════════════
-const DAY_MS = 1 * 60 * 1000; // 1분 = 1거래일 (테스트용)
+const DAY_MS = 10 * 60 * 1000; // 10분 = 1거래일
 
 const STOCK_DEF = [
   { id:'TRCR', name:'테라코어',       sector:'반도체', base:45800, vol:0.018, color:'#00d4ff', type:'stock' },
@@ -1467,7 +1492,6 @@ function tickPrices() {
   else { cdEl.style.color='var(--accent)'; cdEl.style.textShadow='0 0 14px rgba(0,200,255,.45)'; }
 
   if (progress >= 1) {
-    clearInterval(tickTimer);
     clearTimeout(newsTimer);
     endDay();
     return;
@@ -1501,6 +1525,7 @@ function tickPrices() {
       s.intradayHist.push({ price: newPrice, label });
       if (s.intradayHist.length > 500) s.intradayHist.shift();
       priceMap[def.id] = newPrice;
+      priceMap[def.id + '_open'] = s.openPrice;
     });
 
     // 분할 발생 시 보유자 수량 조정 + 알림
@@ -1949,7 +1974,28 @@ function renderRelatedNews(id) {
 // ═══════════════════════════════════════════════
 // NEWS — DAL 방식 (분산 반영, 즉각 반영 없음)
 // ═══════════════════════════════════════════════
+function applyNews(ni) {
+  // 뉴스 적용 (마스터/일반유저 공통)
+  newsFeed.unshift(ni);
+  if (newsFeed.length > 40) newsFeed.pop();
+
+  ni.tickers.forEach(t => {
+    pendingImpacts[t] = (pendingImpacts[t] || 0) + ni.impact;
+  });
+
+  updateNewsBadge();
+  if (currentTab === 'news') renderNews();
+  if (currentTab === 'trade' && state.currentTicker && ni.tickers.includes(state.currentTicker)) renderDetail(state.currentTicker);
+
+  const watchHit = ni.tickers.filter(t => state.watchlist.includes(t));
+  if (watchHit.length > 0) showNewsAlert(ni, watchHit);
+
+  showToast('info', `📰 ${ni.text.substring(0,28)}…`);
+  renderTickerBar();
+}
+
 function generateNews() {
+  if (!isMaster) return; // 마스터만 생성
   const item = NEWS_POOL[Math.floor(Math.random() * NEWS_POOL.length)];
   const elapsed = Date.now() - dayStartTime;
   const prog = Math.min(elapsed / DAY_MS, 1);
@@ -1957,31 +2003,18 @@ function generateNews() {
   const h = 9 + Math.floor(minEl/60);
   const m = minEl % 60;
   const timeStr = h + ':' + String(m).padStart(2,'0');
-
   const ni = { ...item, time: timeStr, id: Date.now() };
-  newsFeed.unshift(ni);
-  if (newsFeed.length > 40) newsFeed.pop();
 
-  // DAL 방식: pendingImpacts에 등록 (즉각 반영 X, 틱마다 0.3씩 분산)
-  item.tickers.forEach(t => {
-    pendingImpacts[t] = (pendingImpacts[t] || 0) + item.impact;
-  });
+  // Firebase에 push (일반유저도 받음)
+  if (window._fbPushNews) window._fbPushNews(ni).catch(()=>{});
 
-  updateNewsBadge();
-  if (currentTab === 'news') renderNews();
-  if (currentTab === 'trade' && state.currentTicker && item.tickers.includes(state.currentTicker)) renderDetail(state.currentTicker);
-
-  // 관심종목 뉴스 알림
-  const watchHit = item.tickers.filter(t => state.watchlist.includes(t));
-  if (watchHit.length > 0) showNewsAlert(ni, watchHit);
-
-  showToast('info', `📰 ${item.text.substring(0,28)}…`);
-  renderTickerBar();
+  applyNews(ni);
   scheduleNews();
 }
 
 function scheduleNews() {
   clearTimeout(newsTimer);
+  if (!isMaster) return; // 마스터만 스케줄
   const delay = 35000 + Math.random() * 35000;
   newsTimer = setTimeout(generateNews, delay);
 }
@@ -2524,8 +2557,19 @@ function endDay() {
     </div>
   `;
   document.getElementById('modal-overlay').classList.add('show');
+  if (window._dayEndFired) return; // 중복 방지
+  window._dayEndFired = true;
   sfxDayEnd();
   uploadRanking();
+  let count = 5;
+  const cdEl = document.getElementById('next-day-countdown');
+  if (cdEl) cdEl.textContent = count + '초 후 다음날로…';
+  const cdTimer = setInterval(() => {
+    count--;
+    if (cdEl) cdEl.textContent = count > 0 ? count + '초 후 다음날로…' : '넘어가는 중…';
+    if (count <= 0) clearInterval(cdTimer);
+  }, 1000);
+  setTimeout(() => { window._dayEndFired = false; nextDay(); }, 5000);
 }
 
 function startCountdown() {
@@ -2551,7 +2595,6 @@ function startCountdown() {
     else { cdEl.style.color='var(--accent)'; cdEl.style.textShadow='0 0 14px rgba(0,200,255,.45)'; }
     if (progress >= 1) {
       clearInterval(window._countdownTimer);
-      clearInterval(tickTimer);
       clearTimeout(newsTimer);
       endDay();
     }
@@ -2571,30 +2614,42 @@ async function nextDay() {
     stocks[def.id].intradayHist = [{ price:stocks[def.id].price, label:'09:00' }];
   });
 
-  // 새 장 시작시간 설정
   const newStart = Date.now();
-  dayStartTime = newStart;
 
-  // 가장 먼저 nextDay 누른 사람이 마스터 선출
-  if (window._fbPushDayStart) {
-    try {
-      await set(window._fbMasterRef, { uid: currentUser?.uid || 'guest', ts: newStart });
-      onDisconnect(window._fbMasterRef).remove();
-      isMaster = true;
-      showToast('buy', '👑 마스터 선출됨 — 새 장 시작');
-    } catch(e) {}
-    await window._fbPushDayStart(newStart).catch(()=>{});
+  // dayStart가 이미 있는지 확인 (다른 사람이 먼저 눌렀는지)
+  let existingStart = null;
+  if (window._fbGetDayStart) {
+    existingStart = await window._fbGetDayStart().catch(() => null);
   }
 
-  // 마스터면 틱 재시작
+  if (existingStart && existingStart > dayStartTime) {
+    // 다른 사람이 먼저 누름 → 그 시간으로 동기화
+    dayStartTime = existingStart;
+  } else {
+    // 내가 먼저 → dayStart push + 마스터 선점
+    dayStartTime = newStart;
+    if (window._fbPushDayStart) {
+      await window._fbPushDayStart(newStart).catch(()=>{});
+    }
+    if (window._fbMasterRef) {
+      try {
+        await set(window._fbMasterRef, { uid: currentUser?.uid || 'guest', ts: newStart });
+        onDisconnect(window._fbMasterRef).remove();
+        isMaster = true;
+        const badge = document.getElementById('master-badge');
+        if (badge) badge.style.display = 'block';
+        showToast('buy', '👑 마스터 선출됨');
+      } catch(e) {}
+    }
+  }
+
+  // 마스터면 항상 틱 재시작 (이전 날 endDay에서 멈춘 틱 재시작)
   if (isMaster) {
     clearInterval(tickTimer);
-    tickTimer = setInterval(tickPrices, 1000);
+    tickTimer = setInterval(tickPrices, 1500);
   }
 
-  // 카운트다운 재시작
   startCountdown();
-
   scheduleNews(); generateNews(); updateNewsBadge();
   if (currentTab==='news') renderNews();
   renderSidebar();
@@ -3400,7 +3455,7 @@ function startMasterMode() {
   if (badge) badge.style.display = 'block';
   showToast('buy', '👑 마스터 선출됨 — 시세 생성 중');
   clearInterval(tickTimer);
-  tickTimer = setInterval(tickPrices, 1000);
+  tickTimer = setInterval(tickPrices, 1500);
   if (window._fbGetDayStart) {
     window._fbGetDayStart().then(ts => {
       if (!ts) {
@@ -3443,20 +3498,24 @@ function bootGame() {
   if (!subsInitialized) {
     subsInitialized = true;
 
-    // 장 시작시간 구독 (1회만)
+    // 장 시작시간 구독 (1회만) — 마스터/일반 모두 새 dayStart 받으면 즉시 동기화
     if (window._fbSubscribeDayStart) {
       window._fbSubscribeDayStart((ts) => {
-        if (!isMaster) dayStartTime = ts;
+        if (ts !== dayStartTime) {
+          dayStartTime = ts;
+          // 새 dayStart면 카운트다운 리셋
+          startCountdown();
+          // 결산 모달 닫기 (다른 사람이 nextDay 눌렀을 때)
+          document.getElementById('modal-overlay').classList.remove('show');
+        }
       });
     }
 
     // 가격 구독 (1회만)
     if (window._fbSubscribePrices) {
       window._fbSubscribePrices((data) => {
-        console.log('[구독] 가격 수신:', isMaster ? '마스터라 무시' : '처리중', data?.prices ? Object.keys(data.prices).length + '개' : 'null');
         if (isMaster) return;
         if (!data || !data.prices) return;
-        console.log('[구독] stocks 상태:', Object.keys(stocks).length, '개, isMaster:', isMaster);
         const elapsed = Date.now() - dayStartTime;
         const minEl = Math.floor(Math.min(elapsed / DAY_MS, 1) * 390);
         const h = 9 + Math.floor(minEl / 60);
@@ -3465,15 +3524,27 @@ function bootGame() {
         const isFirst = STOCK_DEF.every(def => stocks[def.id].intradayHist.length <= 1);
         STOCK_DEF.forEach(def => {
           const newPrice = data.prices[def.id];
+          const openPrice = data.prices[def.id + '_open'];
           if (!newPrice) return;
           const s = stocks[def.id];
-          if (isFirst) s.openPrice = newPrice;
+          if (openPrice) s.openPrice = openPrice; // 마스터 기준 openPrice 동기화
+          else if (isFirst) s.openPrice = newPrice;
           s.price = newPrice;
           s.history.push(newPrice);
           s.intradayHist.push({ price: newPrice, label });
           if (s.intradayHist.length > 500) s.intradayHist.shift();
         });
         refreshUI();
+      });
+    }
+
+    // 뉴스 구독 (일반 유저)
+    if (window._fbSubscribeNews) {
+      window._fbSubscribeNews((ni) => {
+        if (isMaster) return;
+        if (!ni || !ni.id) return;
+        if (newsFeed.some(n => n.id === ni.id)) return;
+        applyNews(ni);
       });
     }
   }
@@ -3483,12 +3554,14 @@ function bootGame() {
     window._fbWatchMaster(
       currentUser.uid,
       () => {
-        if (!isMaster) {
-          isMaster = true;
-          showToast('buy', '👑 마스터 선출됨');
-          clearInterval(tickTimer);
-          tickTimer = setInterval(tickPrices, 1000);
-        }
+        // 이미 마스터면 무시
+        if (isMaster) return;
+        isMaster = true;
+        const badge = document.getElementById('master-badge');
+        if (badge) badge.style.display = 'block';
+        showToast('buy', '👑 마스터 선출됨');
+        clearInterval(tickTimer);
+        tickTimer = setInterval(tickPrices, 1500);
       },
       () => stopMasterMode()
     );
@@ -3497,7 +3570,7 @@ function bootGame() {
   // 홈복귀 시 마스터면 틱 즉시 재시작
   if (isMaster) {
     clearInterval(tickTimer);
-    tickTimer = setInterval(tickPrices, 1000);
+    tickTimer = setInterval(tickPrices, 1500);
   }
 
   // 장 시작시간
