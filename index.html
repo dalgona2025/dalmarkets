@@ -849,11 +849,12 @@ window._fbTryBecomeMaster = async (uid) => {
   return snap.val().uid === uid; // 이미 내가 마스터면 true
 };
 
-// 마스터 변경 감지 (내가 마스터인지 실시간 확인)
+// 마스터 변경 감지 — 매번 재등록 가능하게 unsubscribe 반환
 window._fbWatchMaster = (uid, onBecomeMaster, onLoseMaster) => {
-  onValue(masterRef, async (snap) => {
+  // 이전 구독 해제
+  if (window._masterUnsub) { window._masterUnsub(); window._masterUnsub = null; }
+  const unsub = onValue(masterRef, async (snap) => {
     if (!snap.exists()) {
-      // 마스터 없음 → 내가 도전
       try {
         await set(masterRef, { uid, ts: Date.now() });
         onDisconnect(masterRef).remove();
@@ -865,6 +866,7 @@ window._fbWatchMaster = (uid, onBecomeMaster, onLoseMaster) => {
       onLoseMaster();
     }
   });
+  window._masterUnsub = unsub;
 };
 
 // 장 시작시간 ref
@@ -3430,59 +3432,34 @@ function goHome() {
 }
 
 function bootGame() {
-  // initStocks는 최초 1회만 — 이후엔 마스터 시세 유지
-  if (!subsInitialized) initStocks();
-
-  // 구독은 최초 1회만 등록
+  // initStocks는 최초 1회만
   if (!subsInitialized) {
+    initStocks();
     subsInitialized = true;
 
-    // 장 시작시간 구독
+    // 장 시작시간 구독 (1회만)
     if (window._fbSubscribeDayStart) {
       window._fbSubscribeDayStart((ts) => {
         if (!isMaster) dayStartTime = ts;
       });
     }
 
-    // 가격 구독
+    // 가격 구독 (1회만)
     if (window._fbSubscribePrices) {
       window._fbSubscribePrices((data) => {
         if (isMaster) return;
         if (!data || !data.prices) return;
         const elapsed = Date.now() - dayStartTime;
-        const progress = Math.min(elapsed / DAY_MS, 1);
-        const minEl = Math.floor(progress * 390);
+        const minEl = Math.floor(Math.min(elapsed / DAY_MS, 1) * 390);
         const h = 9 + Math.floor(minEl / 60);
         const m = minEl % 60;
         const label = h + ':' + String(m).padStart(2,'0');
-
-        // 분할 처리
-        const splits = data.splits || {};
-        Object.entries(splits).forEach(([id, ratio]) => {
-          const s = stocks[id];
-          if (!s || s.price <= 2000000) return;
-          s.history = s.history.map(p => Math.round(p / ratio));
-          s.intradayHist = s.intradayHist.map(hh => ({ ...hh, price: Math.round(hh.price / ratio) }));
-          s.openPrice = Math.round(s.openPrice / ratio);
-          const qty = state.holdings[id] || 0;
-          if (qty > 0) {
-            state.holdings[id] = qty * ratio;
-            state.avgCost[id] = Math.round((state.avgCost[id] || 0) / ratio);
-          }
-          Object.values(state.levHoldings || {}).forEach(pos => {
-            if (pos.stockId === id) pos.avgCost = Math.round(pos.avgCost / ratio);
-          });
-          showToast('buy', `📊 ${STOCK_DEF.find(d=>d.id===id)?.name||id} 주식분할 (1/10)`);
-        });
-
-        // 처음 가격 수신 시 openPrice 초기화
         const isFirst = STOCK_DEF.every(def => stocks[def.id].intradayHist.length <= 1);
-
         STOCK_DEF.forEach(def => {
           const newPrice = data.prices[def.id];
           if (!newPrice) return;
           const s = stocks[def.id];
-          if (isFirst) s.openPrice = newPrice; // 첫 수신 시 openPrice 동기화
+          if (isFirst) s.openPrice = newPrice;
           s.price = newPrice;
           s.history.push(newPrice);
           s.intradayHist.push({ price: newPrice, label });
@@ -3491,15 +3468,22 @@ function bootGame() {
         refreshUI();
       });
     }
+  }
 
-    // 마스터 감시 — 마스터 없으면 자동 선출
-    if (window._fbWatchMaster && currentUser) {
-      window._fbWatchMaster(
-        currentUser.uid,
-        () => startMasterMode(),
-        () => stopMasterMode()
-      );
-    }
+  // 마스터 감시는 매번 재등록 (홈복귀 후 재선출 가능하게)
+  if (window._fbWatchMaster && currentUser) {
+    window._fbWatchMaster(
+      currentUser.uid,
+      () => {
+        if (!isMaster) {
+          isMaster = true;
+          showToast('buy', '👑 마스터 선출됨');
+          clearInterval(tickTimer);
+          tickTimer = setInterval(tickPrices, 3000);
+        }
+      },
+      () => stopMasterMode()
+    );
   }
 
   // 홈복귀 시 마스터면 틱 즉시 재시작
@@ -3508,7 +3492,7 @@ function bootGame() {
     tickTimer = setInterval(tickPrices, 3000);
   }
 
-  // 장 시작시간 — Firebase에서 가져오기
+  // 장 시작시간
   dayStartTime = Date.now();
   if (window._fbGetDayStart) {
     window._fbGetDayStart().then(ts => {
@@ -3516,9 +3500,7 @@ function bootGame() {
     }).catch(() => {});
   }
 
-  // 카운트다운 시작
   startCountdown();
-
   scheduleNews();
   generateNews();
   renderSidebar();
