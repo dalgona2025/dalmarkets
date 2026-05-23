@@ -3456,6 +3456,7 @@ function bootGame() {
         console.log('[구독] 가격 수신:', isMaster ? '마스터라 무시' : '처리중', data?.prices ? Object.keys(data.prices).length + '개' : 'null');
         if (isMaster) return;
         if (!data || !data.prices) return;
+        console.log('[구독] stocks 상태:', Object.keys(stocks).length, '개, isMaster:', isMaster);
         const elapsed = Date.now() - dayStartTime;
         const minEl = Math.floor(Math.min(elapsed / DAY_MS, 1) * 390);
         const h = 9 + Math.floor(minEl / 60);
