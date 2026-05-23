@@ -1130,7 +1130,7 @@ setTimeout(() => {
       <div class="hdr-divider"></div>
       <div class="hdr-stat">
         <div class="hdr-stat-label">마감까지</div>
-        <div id="countdown" style="font-family:var(--mono);font-size:16px;font-weight:700;color:var(--accent);letter-spacing:2px;text-shadow:0 0 12px rgba(0,200,255,.4);">10:00</div>
+        <div id="countdown" style="font-family:var(--mono);font-size:16px;font-weight:700;color:var(--accent);letter-spacing:2px;text-shadow:0 0 12px rgba(0,200,255,.4);">01:00</div>
       </div>
       <div id="day-bar-wrap" style="width:100px;">
         <div id="day-bar-label"><span>시작</span><span>마감</span></div>
@@ -1285,7 +1285,7 @@ setTimeout(() => {
 // ═══════════════════════════════════════════════
 // DATA — DAL 종목 (ETF 제외), BULL 뉴스풀
 // ═══════════════════════════════════════════════
-const DAY_MS = 10 * 60 * 1000; // 10분 = 1거래일
+const DAY_MS = 1 * 60 * 1000; // 1분 = 1거래일 (테스트용)
 
 const STOCK_DEF = [
   { id:'TRCR', name:'테라코어',       sector:'반도체', base:45800, vol:0.018, color:'#00d4ff', type:'stock' },
@@ -3403,7 +3403,6 @@ function goHome() {
 
 function bootGame() {
   initStocks();
-  isMaster = false;
 
   // 구독은 최초 1회만 등록
   if (!subsInitialized) {
@@ -3470,8 +3469,14 @@ function bootGame() {
     }
   }
 
-  // 장 시작시간 — Firebase에서 가져오기 (홈복귀 시 기존 시간 유지)
-  dayStartTime = Date.now(); // 기본값
+  // 홈복귀 시 마스터면 틱 즉시 재시작
+  if (isMaster) {
+    clearInterval(tickTimer);
+    tickTimer = setInterval(tickPrices, 3000);
+  }
+
+  // 장 시작시간 — Firebase에서 가져오기
+  dayStartTime = Date.now();
   if (window._fbGetDayStart) {
     window._fbGetDayStart().then(ts => {
       if (ts) dayStartTime = ts;
@@ -3479,8 +3484,8 @@ function bootGame() {
   }
 
   // 카운트다운 타이머 (매 게임 시작마다 새로 등록)
-  clearInterval(tickTimer);
-  const countdownTimer = setInterval(() => {
+  clearInterval(window._countdownTimer);
+  window._countdownTimer = setInterval(() => {
     const elapsed = Date.now() - dayStartTime;
     const progress = Math.min(elapsed / DAY_MS, 1);
     const minEl = Math.floor(progress * 390);
@@ -3489,7 +3494,7 @@ function bootGame() {
     const el = document.getElementById('day-bar-fill');
     const bt = document.getElementById('bar-time');
     const cdEl = document.getElementById('countdown');
-    if (!cdEl) { clearInterval(countdownTimer); return; }
+    if (!cdEl) { clearInterval(window._countdownTimer); return; }
     if (el) el.style.width = (progress * 100) + '%';
     if (bt) bt.textContent = h + ':' + String(m).padStart(2,'0');
     const remainMs = Math.max(0, DAY_MS - elapsed);
@@ -3499,7 +3504,11 @@ function bootGame() {
     if (remMin < 1) { cdEl.style.color='var(--red)'; cdEl.style.textShadow='0 0 14px rgba(255,61,90,.5)'; }
     else if (remMin < 3) { cdEl.style.color='var(--amber)'; cdEl.style.textShadow='0 0 14px rgba(255,214,0,.4)'; }
     else { cdEl.style.color='var(--accent)'; cdEl.style.textShadow='0 0 14px rgba(0,200,255,.45)'; }
-    if (progress >= 1) { clearInterval(countdownTimer); if (!isMaster) endDay(); }
+    if (progress >= 1) {
+      clearInterval(window._countdownTimer);
+      if (isMaster) { clearInterval(tickTimer); clearTimeout(newsTimer); endDay(); }
+      else endDay();
+    }
   }, 1000);
 
   scheduleNews();
