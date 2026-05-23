@@ -1152,6 +1152,7 @@ setTimeout(() => {
       <div class="user-dot"></div>
       <span id="user-email-display">—</span>
     </div>
+    <div id="master-badge" style="display:none;font-family:var(--mono);font-size:10px;color:#000;background:var(--amber);border-radius:4px;padding:3px 8px;letter-spacing:1px;">👑 MASTER</div>
   </div>
 </div>
 
@@ -3395,10 +3396,11 @@ let subsInitialized = false; // 구독 중복 방지 플래그
 function startMasterMode() {
   if (isMaster) return;
   isMaster = true;
+  const badge = document.getElementById('master-badge');
+  if (badge) badge.style.display = 'block';
   showToast('buy', '👑 마스터 선출됨 — 시세 생성 중');
   clearInterval(tickTimer);
   tickTimer = setInterval(tickPrices, 3000);
-  // dayStart가 없으면 새로 설정
   if (window._fbGetDayStart) {
     window._fbGetDayStart().then(ts => {
       if (!ts) {
@@ -3412,8 +3414,9 @@ function startMasterMode() {
 function stopMasterMode() {
   if (!isMaster) return;
   isMaster = false;
+  const badge = document.getElementById('master-badge');
+  if (badge) badge.style.display = 'none';
   clearInterval(tickTimer);
-  // 마스터 해제 → Firebase에서 master 노드 삭제 → 다음 사람이 자동 인계
   if (window._fbMasterRef) {
     try { remove(window._fbMasterRef).catch(()=>{}); } catch(e) {}
   }
@@ -3423,10 +3426,11 @@ function goHome() {
   liquidateAll();
   autoSave();
   closeSettings();
-  clearInterval(tickTimer);
+  clearInterval(window._countdownTimer);
   clearTimeout(newsTimer);
-  // 마스터면 해제 → 다음 접속자가 자동 인계
-  if (isMaster) stopMasterMode();
+  // 마스터면 틱 유지 — 홈화면 백그라운드에서도 가격 계속 생성
+  // 마스터가 아니면 틱 없음
+  if (!isMaster) clearInterval(tickTimer);
   document.getElementById('home-screen').style.display = 'flex';
   document.getElementById('home-screen').classList.remove('fade-out');
 }
