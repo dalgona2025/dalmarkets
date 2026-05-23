@@ -3527,9 +3527,11 @@ function bootGame() {
           const openPrice = data.prices[def.id + '_open'];
           if (!newPrice) return;
           const s = stocks[def.id];
-          if (openPrice) s.openPrice = openPrice; // 마스터 기준 openPrice 동기화
+          if (openPrice) s.openPrice = openPrice;
           else if (isFirst) s.openPrice = newPrice;
           s.price = newPrice;
+          // 첫 수신 시 intradayHist 리셋 (시드 기반 초기값 제거)
+          if (isFirst) s.intradayHist = [{ price: newPrice, label: '09:00' }];
           s.history.push(newPrice);
           s.intradayHist.push({ price: newPrice, label });
           if (s.intradayHist.length > 500) s.intradayHist.shift();
