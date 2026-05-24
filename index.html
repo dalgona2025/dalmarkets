@@ -1650,7 +1650,7 @@ function renderSidebar() {
       const risk = getRisk(def.vol);
       html += `<div class="stock-row ${isActive?'active':''}" onclick="selectStock('${def.id}')">
         <div class="sr-left">
-          <div class="sr-ticker">${def.id}<span class="risk-badge ${risk.cls}">${risk.g}</span>${s.splitCount > 0 ? `<span style="font-size:8px;color:var(--amber);margin-left:3px;font-family:var(--mono);">÷${Math.pow(10,s.splitCount)}×${s.splitCount}</span>` : ''}</div>
+          <div class="sr-ticker">${def.id}<span class="risk-badge ${risk.cls}">${risk.g}</span></div>
           <div class="sr-name">${def.name}</div>
         </div>
         <div style="display:flex;align-items:center;gap:6px;">
@@ -1739,6 +1739,7 @@ function renderDetail(id) {
       <div class="stat-card"><div class="sl">고가(당일)</div><div class="sv chg-up">${fmtN(Math.max(...s.intradayHist.map(h=>h.price)))}</div></div>
       <div class="stat-card"><div class="sl">저가(당일)</div><div class="sv chg-dn">${fmtN(Math.min(...s.intradayHist.map(h=>h.price)))}</div></div>
       <div class="stat-card"><div class="sl">평가액</div><div class="sv">${fmtMoney(state.holdings[id]*s.price)}</div></div>
+      <div class="stat-card"><div class="sl">주식분할</div><div class="sv" style="color:${s.splitCount>0?'var(--amber)':'var(--muted)'};">${s.splitCount > 0 ? s.splitCount + '회 (1/' + Math.pow(10,s.splitCount) + ')' : '없음'}</div></div>
     </div>
 
     ${renderRelatedNews(id)}
@@ -1760,10 +1761,15 @@ function updateDetailPrices() {
   // update chart in-place (line only)
   if (state.chartType === 'line' && mainChartObj) {
     const slice = getChartSlice();
+    const isUp = s.price >= s.openPrice;
     mainChartObj.data.datasets[0].data = slice;
-    const isUp = slice[slice.length-1] >= slice[0];
     mainChartObj.data.datasets[0].borderColor = isUp ? '#ff3d5a' : '#2196f3';
     mainChartObj.data.datasets[0].backgroundColor = isUp ? 'rgba(255,61,90,0.07)' : 'rgba(33,150,243,0.07)';
+    // 평단가 라인 업데이트
+    if (mainChartObj.data.datasets[1]) {
+      const avg = state.avgCost[state.currentTicker] || 0;
+      mainChartObj.data.datasets[1].data = slice.map(() => avg);
+    }
     mainChartObj.update('none');
   } else if (state.chartType === 'candle') {
     renderMainChart();
@@ -1786,7 +1792,8 @@ function renderMainChart() {
   const canvas = document.getElementById('main-chart');
   if (!canvas) return;
   const slice = getChartSlice();
-  const isUp = slice[slice.length-1] >= slice[0];
+  const s = stocks[state.currentTicker];
+  const isUp = s.price >= s.openPrice; // openPrice 기준으로 색상 결정
 
   if (state.chartType === 'line') {
     const lineC = isUp ? '#ff3d5a' : '#2196f3';
