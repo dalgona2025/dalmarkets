@@ -1765,9 +1765,9 @@ function updateDetailPrices() {
     mainChartObj.data.datasets[0].data = slice;
     mainChartObj.data.datasets[0].borderColor = isUp ? '#ff3d5a' : '#2196f3';
     mainChartObj.data.datasets[0].backgroundColor = isUp ? 'rgba(255,61,90,0.07)' : 'rgba(33,150,243,0.07)';
-    // 평단가 라인 업데이트
+    // 평단가/레버리지 라인은 재렌더링으로 처리
+    const avg = state.avgCost[state.currentTicker] || 0;
     if (mainChartObj.data.datasets[1]) {
-      const avg = state.avgCost[state.currentTicker] || 0;
       mainChartObj.data.datasets[1].data = slice.map(() => avg);
     }
     mainChartObj.update('none');
@@ -1808,6 +1808,15 @@ function renderMainChart() {
     const avgCost = state.avgCost[state.currentTicker] || 0;
     const hasAvg = state.holdings[state.currentTicker] > 0 && avgCost > 0;
 
+    // 레버리지 포지션 평단가 수집
+    const levAvgs = Object.values(state.levHoldings || {})
+      .filter(pos => pos.stockId === state.currentTicker)
+      .map(pos => ({
+        avg: pos.avgCost,
+        color: pos.type === 'inverse' ? 'rgba(33,150,243,0.8)' : 'rgba(255,160,0,0.8)',
+        label: `${pos.type === 'inverse' ? '인버스' : '레버리지'} ×${pos.mult} 평단가`,
+      }));
+
     mainChartObj = new Chart(ctx, {
       type: 'line',
       data: {
@@ -1823,7 +1832,7 @@ function renderMainChart() {
             pointHoverRadius: 4,
             tension: 0.3,
           },
-          // 평단가 가로선
+          // 일반 평단가 가로선
           ...(hasAvg ? [{
             data: slice.map(() => avgCost),
             borderColor: 'rgba(255,214,0,0.7)',
@@ -1834,7 +1843,19 @@ function renderMainChart() {
             fill: false,
             tension: 0,
             label: '평단가',
-          }] : [])
+          }] : []),
+          // 레버리지 평단가 가로선들
+          ...levAvgs.map(lev => ({
+            data: slice.map(() => lev.avg),
+            borderColor: lev.color,
+            backgroundColor: 'transparent',
+            borderWidth: 1.5,
+            borderDash: [3, 3],
+            pointRadius: 0,
+            fill: false,
+            tension: 0,
+            label: lev.label,
+          })),
         ]
       },
       options: {
@@ -1846,7 +1867,10 @@ function renderMainChart() {
             borderColor: 'rgba(0,200,255,0.15)',
             borderWidth: 1,
             callbacks: {
-              label: ctx => ctx.datasetIndex === 0 ? fmt(ctx.raw) : `평단가: ${fmt(ctx.raw)}`
+              label: ctx => {
+                if (ctx.datasetIndex === 0) return fmt(ctx.raw);
+                return `${ctx.dataset.label}: ${fmt(ctx.raw)}`;
+              }
             }
           }
         },
