@@ -915,7 +915,7 @@ window._fbPushPrices = async (priceMap, day, tick, splitMap) => {
     gameDay: day,
     tickCount: tick,
     splits: splitMap || {},
-    ts: Date.now() // serverTimestamp 대신 클라이언트 시간 — 매번 다름
+    ts: Date.now() + tick // tickCount 더해서 항상 다른 값 보장
   });
 };
 
@@ -1592,7 +1592,7 @@ function tickPrices() {
       // 분할 정보도 push에 포함
     }
 
-    if (window._fbPushPrices && tickCount % 3 === 0) {
+    if (window._fbPushPrices) {
       window._fbPushPrices(priceMap, gameDay, tickCount, splitMap).catch(()=>{});
     }
   }
