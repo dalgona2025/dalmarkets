@@ -2180,6 +2180,7 @@ function doBuy() {
   sfxBuy();
   showToast('buy', `${stocks[state.currentTicker].name} ${fmtN(qty)}주 매수 완료`);
   renderHoldings(); updateOrderPanel();
+  if (state.chartType === 'line' && mainChartObj) renderMainChart(); // 평단가 선 즉시 반영
   autoSave();
 }
 
@@ -2196,6 +2197,7 @@ function doSell() {
   sfxSell();
   showToast('sell', `${stocks[state.currentTicker].name} ${fmtN(qty)}주 매도 완료`);
   renderHoldings(); updateOrderPanel();
+  if (state.chartType === 'line' && mainChartObj) renderMainChart(); // 평단가 선 즉시 반영
   autoSave();
 }
 
@@ -3558,15 +3560,20 @@ function bootGame() {
           const s = stocks[def.id];
           if (openPrice) s.openPrice = openPrice;
           else if (isFirst) s.openPrice = newPrice;
-          s.splitCount = data.prices[def.id + '_split'] || 0; // 분할 횟수 동기화
+          s.splitCount = data.prices[def.id + '_split'] || 0;
           s.price = newPrice;
-          // 첫 수신 시 intradayHist 리셋 (시드 기반 초기값 제거)
-          if (isFirst) s.intradayHist = [{ price: newPrice, label: '09:00' }];
+          // 첫 수신 시 intradayHist + history 리셋 (시드 기반 초기값 제거)
+          if (isFirst) {
+            s.intradayHist = [{ price: newPrice, label: '09:00' }];
+            s.history = s.history.slice(0, -1); // 마지막 시드값 제거
+          }
           s.history.push(newPrice);
           s.intradayHist.push({ price: newPrice, label });
           if (s.intradayHist.length > 500) s.intradayHist.shift();
         });
         refreshUI();
+        // 차트 바로 업데이트
+        if (currentTab === 'trade' && state.currentTicker) updateDetailPrices();
       });
     }
 
