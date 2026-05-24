@@ -1408,8 +1408,9 @@ function initStocks() {
       price: hist[hist.length - 1],
       openPrice: hist[hist.length - 1],
       prevClose: hist[hist.length - 1],
-      history: hist,         // BULL: 장기 배열 (가격만)
-      intradayHist: [{ price: hist[hist.length-1], label:'09:00' }], // DAL: intraday
+      history: hist,
+      intradayHist: [{ price: hist[hist.length-1], label:'09:00' }],
+      splitCount: 0, // 분할 횟수
     };
     state.holdings[def.id] = 0;
     state.avgCost[def.id] = 0;
@@ -1514,10 +1515,11 @@ function tickPrices() {
       // 200만원 초과 시 1/10 분할
       if (newPrice > 2000000) {
         newPrice = Math.round(newPrice / 10);
-        splitMap[def.id] = 10; // 10분의 1 분할
+        splitMap[def.id] = 10;
         s.history = s.history.map(p => Math.round(p / 10));
         s.intradayHist = s.intradayHist.map(h => ({ ...h, price: Math.round(h.price / 10) }));
         s.openPrice = Math.round(s.openPrice / 10);
+        s.splitCount = (s.splitCount || 0) + 1;
       }
 
       s.price = newPrice;
@@ -1526,6 +1528,7 @@ function tickPrices() {
       if (s.intradayHist.length > 500) s.intradayHist.shift();
       priceMap[def.id] = newPrice;
       priceMap[def.id + '_open'] = s.openPrice;
+      priceMap[def.id + '_split'] = s.splitCount || 0; // 분할 횟수 전송
     });
 
     // 분할 발생 시 보유자 수량 조정 + 알림
@@ -1647,7 +1650,7 @@ function renderSidebar() {
       const risk = getRisk(def.vol);
       html += `<div class="stock-row ${isActive?'active':''}" onclick="selectStock('${def.id}')">
         <div class="sr-left">
-          <div class="sr-ticker">${def.id}<span class="risk-badge ${risk.cls}">${risk.g}</span></div>
+          <div class="sr-ticker">${def.id}<span class="risk-badge ${risk.cls}">${risk.g}</span>${s.splitCount > 0 ? `<span style="font-size:8px;color:var(--amber);margin-left:3px;font-family:var(--mono);">÷${Math.pow(10,s.splitCount)}×${s.splitCount}</span>` : ''}</div>
           <div class="sr-name">${def.name}</div>
         </div>
         <div style="display:flex;align-items:center;gap:6px;">
@@ -1795,20 +1798,37 @@ function renderMainChart() {
     canvas.style.width = '100%';
     canvas.style.height = '180px';
     const ctx = canvas.getContext('2d');
+    const avgCost = state.avgCost[state.currentTicker] || 0;
+    const hasAvg = state.holdings[state.currentTicker] > 0 && avgCost > 0;
+
     mainChartObj = new Chart(ctx, {
       type: 'line',
       data: {
         labels,
-        datasets: [{
-          data: slice,
-          borderColor: lineC,
-          backgroundColor: fillC,
-          borderWidth: 2,
-          fill: true,
-          pointRadius: 0,
-          pointHoverRadius: 4,
-          tension: 0.3,
-        }]
+        datasets: [
+          {
+            data: slice,
+            borderColor: lineC,
+            backgroundColor: fillC,
+            borderWidth: 2,
+            fill: true,
+            pointRadius: 0,
+            pointHoverRadius: 4,
+            tension: 0.3,
+          },
+          // 평단가 가로선
+          ...(hasAvg ? [{
+            data: slice.map(() => avgCost),
+            borderColor: 'rgba(255,214,0,0.7)',
+            backgroundColor: 'transparent',
+            borderWidth: 1.5,
+            borderDash: [5, 4],
+            pointRadius: 0,
+            fill: false,
+            tension: 0,
+            label: '평단가',
+          }] : [])
+        ]
       },
       options: {
         responsive: true, maintainAspectRatio: false,
@@ -1818,7 +1838,9 @@ function renderMainChart() {
             backgroundColor: '#111820',
             borderColor: 'rgba(0,200,255,0.15)',
             borderWidth: 1,
-            callbacks: { label: ctx => fmt(ctx.raw) }
+            callbacks: {
+              label: ctx => ctx.datasetIndex === 0 ? fmt(ctx.raw) : `평단가: ${fmt(ctx.raw)}`
+            }
           }
         },
         scales: {
@@ -3529,6 +3551,7 @@ function bootGame() {
           const s = stocks[def.id];
           if (openPrice) s.openPrice = openPrice;
           else if (isFirst) s.openPrice = newPrice;
+          s.splitCount = data.prices[def.id + '_split'] || 0; // 분할 횟수 동기화
           s.price = newPrice;
           // 첫 수신 시 intradayHist 리셋 (시드 기반 초기값 제거)
           if (isFirst) s.intradayHist = [{ price: newPrice, label: '09:00' }];
