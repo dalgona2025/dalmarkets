@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>NEXUS Markets — 주식 시뮬레이터</title>
+<title>DAL MARKETS — 주식 시뮬레이터</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Bebas+Neue&family=Noto+Sans+KR:wght@300;400;500;700&display=swap" rel="stylesheet">
 <style>
@@ -202,7 +202,7 @@ body{
 .rS{background:rgba(255,61,90,.2);color:var(--red);border:1px solid rgba(255,61,90,.4);}
 .rA{background:rgba(255,214,0,.15);color:var(--amber);border:1px solid rgba(255,214,0,.35);}
 .rB{background:rgba(77,159,255,.12);color:var(--blue);border:1px solid rgba(77,159,255,.3);}
-.rC{background:rgba(33,150,243,.1);color:var(--green);border:1px solid rgba(33,150,243,.25);}
+.rC{background:rgba(0,200,120,.12);color:#00c878;border:1px solid rgba(0,200,120,.3);}
 
 /* MAIN */
 #main{flex:1;overflow-y:auto;padding:16px;}
@@ -787,14 +787,14 @@ import { getDatabase, ref, set, get, onValue, onDisconnect, remove, serverTimest
   from "https://www.gstatic.com/firebasejs/12.13.0/firebase-database.js";
 
 const firebaseConfig = {
-  apiKey: "AIzaSyC7hJj8DT5hztoyVGoRU3DGfWpIniJneo4",
-  authDomain: "dalmarkets.firebaseapp.com",
-  projectId: "dalmarkets",
-  storageBucket: "dalmarkets.firebasestorage.app",
-  messagingSenderId: "378620802460",
-  appId: "1:378620802460:web:df60d4233d657b3a800459",
-  measurementId: "G-JZR90Y4Z86",
-  databaseURL: "https://dalmarkets-default-rtdb.firebaseio.com"
+  apiKey: "AIzaSyABCzoOnSJkdDFIbdjc7akGraXH6dUQG5E",
+  authDomain: "dal-markets.firebaseapp.com",
+  databaseURL: "https://dal-markets-default-rtdb.firebaseio.com",
+  projectId: "dal-markets",
+  storageBucket: "dal-markets.firebasestorage.app",
+  messagingSenderId: "875160222162",
+  appId: "1:875160222162:web:8de8b30117dca1d4e8700b",
+  measurementId: "G-8L51FGX925"
 };
 
 const app  = initializeApp(firebaseConfig);
@@ -1054,6 +1054,10 @@ setTimeout(() => {
 
     <!-- 저장 탭 -->
     <div id="spanel-save" style="display:none;">
+      <div class="settings-row">
+        <div><div class="settings-label">자동 로그인</div><div class="settings-sub">다음 방문 시 자동으로 로그인</div></div>
+        <label class="toggle"><input type="checkbox" id="autologin-toggle" onchange="setAutoLogin(this.checked)"><div class="toggle-track"></div></label>
+      </div>
       <div class="settings-row" style="flex-direction:column;align-items:flex-start;gap:6px;">
         <div class="settings-label">게임 저장</div>
         <div class="settings-sub">현재 진행상황을 클라우드에 저장합니다</div>
@@ -1188,6 +1192,7 @@ setTimeout(() => {
   <button class="tab-btn" onclick="switchTab('watchlist',this)">⭐ 관심종목</button>
   <button class="tab-btn" onclick="switchTab('assets',this)">💼 내 자산</button>
   <button class="tab-btn" onclick="switchTab('ranking',this)">🏆 순위표</button>
+  <button class="tab-btn" onclick="switchTab('achieve',this)">🎖 업적</button>
 </div>
 
 <!-- 3-COLUMN -->
@@ -1223,6 +1228,10 @@ setTimeout(() => {
     <!-- RANKING -->
     <div id="tab-ranking" style="display:none">
       <div id="ranking-content"></div>
+    </div>
+    <!-- ACHIEVE -->
+    <div id="tab-achieve" style="display:none">
+      <div id="achieve-content"></div>
     </div>
   </div>
 
@@ -1395,14 +1404,23 @@ let currentTab = 'trade';
 let levState = { type: 'leverage', mult: 1 };
 let mainChartObj = null;
 
-// ═══════════════════════════════════════════════
-// INIT
-// ═══════════════════════════════════════════════
+// 일일 트렌드 — 매일 종목별 방향성 랜덤 설정
+let dailyTrend = {}; // { TRCR: +0.002, QTSC: -0.003, ... }
+
+function setDailyTrend() {
+  const trendRand = seededRand(getDateSeed() * 100 + gameDay);
+  STOCK_DEF.forEach(def => {
+    // 50% 확률로 상승/하락 트렌드, 크기는 변동성의 20~60%
+    const dir = trendRand() > 0.5 ? 1 : -1;
+    const mag = def.vol * (0.2 + trendRand() * 0.4);
+    dailyTrend[def.id] = dir * mag * 0.1; // 틱당 소량 적용
+  });
+}
 function initStocks() {
   // 날짜 기준 시드 재초기화 — 모든 유저 동일한 초기 시세
   globalRand = seededRand(getDateSeed());
   STOCK_DEF.forEach(def => {
-    const hist = genHistory(def.base, def.vol, 365, globalRand);
+    const hist = genHistory(def.base, def.vol, 60, globalRand);
     stocks[def.id] = {
       ...def,
       price: hist[hist.length - 1],
@@ -1454,7 +1472,7 @@ function genHistory(base, vol, days, rand) {
   const r = rand || globalRand;
   let arr = [], price = base * (0.8 + r() * 0.4);
   for (let i = 0; i < days; i++) {
-    const d = (r() - 0.47) * vol;
+    const d = (r() - 0.48) * vol;
     price = Math.max(Math.round(price * (1 + d)), Math.round(base * 0.3));
     arr.push(price);
   }
@@ -1506,20 +1524,42 @@ function tickPrices() {
     const splitMap = {}; // 분할 발생 종목 { id: ratio }
     STOCK_DEF.forEach((def, defIdx) => {
       const s = stocks[def.id];
-      const d = (getTickRand(defIdx) - 0.47) * def.vol;
+      const d = (getTickRand(defIdx) - 0.48) * def.vol;
+      const trend = dailyTrend[def.id] || 0; // 오늘의 트렌드
       let imp = pendingImpacts[def.id] || 0;
       if (imp) delete pendingImpacts[def.id];
-      const change = d + imp * 0.3;
+      const change = d + trend + imp * 0.3;
       let newPrice = Math.max(Math.round(s.price * (1 + change)), Math.round(def.base * 0.2));
 
-      // 200만원 초과 시 1/10 분할
-      if (newPrice > 2000000) {
+      // 등급별 분할 기준
+      const splitThreshold = getSplitThreshold(def.vol);
+      if (newPrice > splitThreshold) {
         newPrice = Math.round(newPrice / 10);
         splitMap[def.id] = 10;
         s.history = s.history.map(p => Math.round(p / 10));
         s.intradayHist = s.intradayHist.map(h => ({ ...h, price: Math.round(h.price / 10) }));
         s.openPrice = Math.round(s.openPrice / 10);
         s.splitCount = (s.splitCount || 0) + 1;
+      }
+
+      // 상장폐지 처리
+      const delistThreshold = getDelistThreshold(def.vol);
+      if (newPrice < delistThreshold) {
+        // 상장폐지 — 보유자 손실 처리
+        const qty = state.holdings[def.id] || 0;
+        if (qty > 0) {
+          showToast('err', `🚨 ${def.name} 상장폐지! 보유 주식 전량 손실`);
+          state.holdings[def.id] = 0;
+          state.avgCost[def.id] = 0;
+        }
+        // 레버리지도 청산
+        Object.keys(state.levHoldings || {}).forEach(key => {
+          if (state.levHoldings[key].stockId === def.id) delete state.levHoldings[key];
+        });
+        // 상폐 플래그 — nextDay에서 재상장
+        s.delisted = true;
+        s.delistDay = gameDay;
+        newPrice = 0;
       }
 
       s.price = newPrice;
@@ -1552,7 +1592,7 @@ function tickPrices() {
       // 분할 정보도 push에 포함
     }
 
-    if (window._fbPushPrices) {
+    if (window._fbPushPrices && tickCount % 3 === 0) {
       window._fbPushPrices(priceMap, gameDay, tickCount, splitMap).catch(()=>{});
     }
   }
@@ -1609,6 +1649,24 @@ function getRisk(vol) {
   if (vol >= 0.025) return { g:'A', cls:'rA' };
   if (vol >= 0.018) return { g:'B', cls:'rB' };
   return { g:'C', cls:'rC' };
+}
+
+// 등급별 분할 기준가
+function getSplitThreshold(vol) {
+  const g = getRisk(vol).g;
+  if (g === 'S') return 2000000; // S: 200만
+  if (g === 'A') return 1000000; // A: 100만
+  if (g === 'B') return 500000;  // B: 50만
+  return 500000;                  // C: 50만
+}
+
+// 등급별 상장폐지 기준가
+function getDelistThreshold(vol) {
+  const g = getRisk(vol).g;
+  if (g === 'S') return 100;   // S: 100원
+  if (g === 'A') return 500;   // A: 500원
+  if (g === 'B') return 1000;  // B: 1000원
+  return 2000;                  // C: 2000원
 }
 
 // ═══════════════════════════════════════════════
@@ -2676,11 +2734,29 @@ async function nextDay() {
   tickCount = 0;
   document.getElementById('day-num').textContent = gameDay;
   newsFeed = []; pendingImpacts = {};
+  setDailyTrend(); // 새 날 트렌드 설정
   resetAssetsState();
   STOCK_DEF.forEach(def => {
-    stocks[def.id].openPrice = stocks[def.id].price;
-    stocks[def.id].prevClose = stocks[def.id].price;
-    stocks[def.id].intradayHist = [{ price:stocks[def.id].price, label:'09:00' }];
+    const s = stocks[def.id];
+    // 상폐 종목 재상장
+    if (s.delisted) {
+      const newHist = genHistory(def.base, def.vol, 30, seededRand(Date.now() + def.base));
+      stocks[def.id] = {
+        ...def,
+        price: newHist[newHist.length-1],
+        openPrice: newHist[newHist.length-1],
+        prevClose: newHist[newHist.length-1],
+        history: newHist,
+        intradayHist: [{ price: newHist[newHist.length-1], label:'09:00' }],
+        splitCount: 0,
+        delisted: false,
+      };
+      showToast('buy', `📋 ${def.name} 재상장`);
+      return;
+    }
+    stocks[def.id].openPrice = s.price;
+    stocks[def.id].prevClose = s.price;
+    stocks[def.id].intradayHist = [{ price: s.price, label:'09:00' }];
   });
 
   const newStart = Date.now();
@@ -2731,19 +2807,20 @@ async function nextDay() {
 // ═══════════════════════════════════════════════
 function switchTab(tab, el) {
   currentTab = tab;
-  ['trade','news','watchlist','assets','ranking'].forEach(t => {
+  ['trade','news','watchlist','assets','ranking','achieve'].forEach(t => {
     document.getElementById('tab-'+t).style.display = t===tab ? 'block' : 'none';
   });
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
   if (el) el.classList.add('active');
   else {
-    const map = { trade:0, news:1, watchlist:2, assets:3, ranking:4 };
+    const map = { trade:0, news:1, watchlist:2, assets:3, ranking:4, achieve:5 };
     document.querySelectorAll('.tab-btn')[map[tab]]?.classList.add('active');
   }
   if (tab==='news') renderNews();
   if (tab==='watchlist') renderWatchlist();
   if (tab==='assets') renderAssets();
   if (tab==='ranking') renderRanking();
+  if (tab==='achieve') renderAchieve();
   if (tab==='trade' && state.currentTicker) renderDetail(state.currentTicker);
 }
 
@@ -2959,9 +3036,18 @@ function startGame() {
   }, 600);
 }
 
+function setAutoLogin(val) {
+  localStorage.setItem('dal_autologin', val ? '1' : '0');
+}
+function checkAutoLogin() {
+  return localStorage.getItem('dal_autologin') === '1';
+}
+// 설정탭 열 때 자동로그인 상태 반영
 function openSettings() {
   sfxClick();
   setSettingsTab('audio');
+  const tog = document.getElementById('autologin-toggle');
+  if (tog) tog.checked = checkAutoLogin();
   document.getElementById('settings-modal').classList.add('show');
 }
 function closeSettings() {
@@ -3096,8 +3182,59 @@ function exitGame() {
 })();
 
 // ═══════════════════════════════════════════════
-// RANKING
+// 업적 시스템
 // ═══════════════════════════════════════════════
+const ACHIEVEMENTS = [
+  { id:'first_buy',   icon:'🛒', name:'첫 매수',        desc:'처음으로 주식을 매수했습니다',         check: () => state.txLog.some(t=>t.type==='buy') },
+  { id:'first_sell',  icon:'💰', name:'첫 매도',        desc:'처음으로 주식을 매도했습니다',         check: () => state.txLog.some(t=>t.type==='sell') },
+  { id:'first_lev',   icon:'⚡', name:'레버리지 입문',  desc:'레버리지 매수를 처음으로 했습니다',    check: () => state.txLog.some(t=>t.lev) },
+  { id:'trade10',     icon:'📊', name:'트레이더',        desc:'거래를 10번 이상 했습니다',            check: () => state.txLog.length >= 10 },
+  { id:'trade100',    icon:'💹', name:'프로 트레이더',   desc:'거래를 100번 이상 했습니다',           check: () => state.txLog.length >= 100 },
+  { id:'profit10',    icon:'📈', name:'수익 10%',        desc:'총 수익률 10% 달성',                   check: () => getTotalAsset() >= INIT_CASH * 1.1 },
+  { id:'profit50',    icon:'🚀', name:'수익 50%',        desc:'총 수익률 50% 달성',                   check: () => getTotalAsset() >= INIT_CASH * 1.5 },
+  { id:'profit100',   icon:'💎', name:'수익 100%',       desc:'총 자산 2배 달성',                     check: () => getTotalAsset() >= INIT_CASH * 2 },
+  { id:'profit500',   icon:'👑', name:'전설의 투자자',   desc:'총 자산 6배 달성',                     check: () => getTotalAsset() >= INIT_CASH * 6 },
+  { id:'day5',        icon:'📅', name:'5일 생존',        desc:'5일 이상 플레이했습니다',              check: () => gameDay >= 5 },
+  { id:'day30',       icon:'🗓', name:'한 달',           desc:'30일 이상 플레이했습니다',             check: () => gameDay >= 30 },
+  { id:'split',       icon:'✂️', name:'분할의 목격자',   desc:'주식분할을 경험했습니다',              check: () => Object.values(stocks).some(s=>s.splitCount>0) },
+  { id:'delist',      icon:'💀', name:'상폐 생존자',     desc:'보유 주식이 상장폐지됐습니다',         check: () => state.txLog.some(t=>t.type==='delist') },
+  { id:'watchlist5',  icon:'⭐', name:'관심 종목 5개',   desc:'관심종목을 5개 등록했습니다',          check: () => state.watchlist.length >= 5 },
+  { id:'allstock',    icon:'🏦', name:'분산 투자',       desc:'5개 이상 종목을 동시에 보유했습니다',  check: () => STOCK_DEF.filter(d=>state.holdings[d.id]>0).length >= 5 },
+  { id:'loss30',      icon:'😢', name:'손실의 쓴맛',     desc:'총 손실 30% 이상 경험',               check: () => getTotalAsset() <= INIT_CASH * 0.7 },
+];
+
+function checkAchievements() {
+  const earned = JSON.parse(localStorage.getItem('dal_achievements') || '[]');
+  ACHIEVEMENTS.forEach(a => {
+    if (!earned.includes(a.id) && a.check()) {
+      earned.push(a.id);
+      localStorage.setItem('dal_achievements', JSON.stringify(earned));
+      showToast('buy', `🎖 업적 달성: ${a.name}`);
+    }
+  });
+}
+
+function renderAchieve() {
+  const earned = JSON.parse(localStorage.getItem('dal_achievements') || '[]');
+  const el = document.getElementById('achieve-content');
+  el.innerHTML = `
+    <div style="padding:16px;">
+      <div style="font-family:var(--display);font-size:20px;color:var(--accent);letter-spacing:3px;margin-bottom:4px;">🎖 ACHIEVEMENTS</div>
+      <div style="font-family:var(--mono);font-size:10px;color:var(--muted);margin-bottom:16px;">${earned.length} / ${ACHIEVEMENTS.length} 달성</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+        ${ACHIEVEMENTS.map(a => {
+          const done = earned.includes(a.id);
+          return `<div style="background:${done?'rgba(0,200,255,.06)':'var(--bg3)'};border:1px solid ${done?'rgba(0,200,255,.2)':'var(--border)'};border-radius:8px;padding:12px;opacity:${done?1:0.45};">
+            <div style="font-size:22px;margin-bottom:6px;">${a.icon}</div>
+            <div style="font-size:12px;font-weight:700;color:${done?'var(--text)':'var(--muted)'};">${a.name}</div>
+            <div style="font-size:10px;color:var(--muted);margin-top:3px;">${a.desc}</div>
+            ${done?'<div style="font-size:9px;color:var(--accent);margin-top:6px;font-family:var(--mono);">✓ 달성</div>':''}
+          </div>`;
+        }).join('')}
+      </div>
+    </div>
+  `;
+}
 // ── 자동저장 ──
 let autoSaveTimer = null;
 async function autoSave() {
@@ -3123,6 +3260,7 @@ async function autoSave() {
         savedAt: new Date().toLocaleString('ko-KR'),
       };
       await window._fbSave(user.uid, data);
+      checkAchievements();
       // 저장 성공 표시
       const el = document.getElementById('hdr-total');
       if (el) { const orig = el.style.color; el.style.color='var(--accent)'; setTimeout(()=>el.style.color=orig, 600); }
@@ -3135,7 +3273,7 @@ async function autoSave() {
         await window._fbSaveRanking(user.uid, user.email, total, gameDay);
       }
     } catch(e) { console.error('랭킹 업로드 실패:', e); }
-  }, 500); // 500ms 디바운스
+  }, 5000); // 5초 디바운스
 }
 
 async function uploadRanking() {
@@ -3146,8 +3284,8 @@ async function uploadRanking() {
   } catch(e) { console.error('랭킹 업로드 실패:', e); }
 }
 
-// 5초마다 자동저장 (저장 시 랭킹도 같이 업로드됨)
-setInterval(() => { if (currentUser) autoSave(); }, 5000);
+// 60초마다 자동저장
+setInterval(() => { if (currentUser) autoSave(); }, 60000);
 
 // 탭/브라우저 닫을 때 청산 후 저장
 window.addEventListener('beforeunload', () => {
@@ -3321,6 +3459,9 @@ async function doSignup() {
   try {
     await window._fbSignUp(email, pw);
     setLoginOk('계정이 생성되었습니다! 로그인 중…');
+    // 회원가입 후 바로 로그인
+    await window._fbSignIn(email, pw);
+    document.getElementById('login-screen').style.display = 'none';
   } catch(e) {
     btn.disabled = false; btn.textContent = '계정 만들기';
     const msg = {
@@ -3505,6 +3646,10 @@ function initAuth() {
       } catch(e) { console.warn('자동 불러오기 실패', e); }
     } else {
       currentUser = null;
+      // 자동로그인 꺼져있으면 로그인화면 표시
+      if (!checkAutoLogin()) {
+        document.getElementById('login-screen').style.display = 'flex';
+      }
       document.getElementById('login-screen').style.display = 'none';
       updateHomeLoginBtn(null);
     }
@@ -3562,6 +3707,7 @@ function goHome() {
 function bootGame() {
   // stocks가 비어있으면 항상 initStocks 실행
   if (Object.keys(stocks).length === 0) initStocks();
+  setDailyTrend(); // 오늘의 트렌드 설정
 
   // 구독은 최초 1회만 등록
   if (!subsInitialized) {
