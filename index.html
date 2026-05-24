@@ -2275,6 +2275,7 @@ function doLevBuy() {
   renderHoldings(); renderLevPositions(); updateLevInfo();
   sfxBuy();
   showToast('buy', `${s.name} ${levState.type==='inverse'?'인버스':'레버리지'} ×${levState.mult} ${fmtN(qty)}주 매수`);
+  if (state.chartType === 'line' && mainChartObj) renderMainChart();
   autoSave();
 }
 function doLevSell() {
@@ -2297,6 +2298,7 @@ function doLevSell() {
   renderHoldings(); renderLevPositions(); updateLevInfo();
   sfxSell();
   showToast(pnl>=0?'buy':'sell', `${s.name} 레버리지 매도 ${pnl>=0?'+':''}${fmt(Math.round(pnl))}`);
+  if (state.chartType === 'line' && mainChartObj) renderMainChart();
   autoSave();
 }
 function renderLevPositions() {
