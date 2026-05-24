@@ -832,6 +832,16 @@ window._fbLoadRanking = async () => {
   return snap.docs.map(d => ({ uid: d.id, ...d.data() }));
 };
 
+// history 저장 (마스터 결산 시)
+window._fbSaveHistory = async (historyData) => {
+  await setDoc(doc(db, 'market', 'history'), historyData);
+};
+// history 불러오기 (일반 유저 접속 시)
+window._fbLoadHistory = async () => {
+  const snap = await getDoc(doc(db, 'market', 'history'));
+  return snap.exists() ? snap.data() : null;
+};
+
 // ── 자동 마스터 선출 시스템 ──
 const masterRef   = ref(rtdb, 'market/master');
 const pricesRef   = ref(rtdb, 'market/prices');
@@ -909,14 +919,8 @@ window._fbGetDayStart = async () => {
 window._fbMasterRef = masterRef;
 
 // 가격 push (마스터) — ts를 매번 다르게 해서 Firebase가 변경으로 인식
-window._fbPushPrices = async (priceMap, day, tick, splitMap) => {
-  await set(pricesRef, {
-    prices: priceMap,
-    gameDay: day,
-    tickCount: tick,
-    splits: splitMap || {},
-    ts: Date.now() + tick // tickCount 더해서 항상 다른 값 보장
-  });
+window._fbPushPrices = async (payload) => {
+  await set(pricesRef, { ...payload, ts: Date.now() });
 };
 
 // 가격 구독 (일반 유저)
@@ -924,6 +928,12 @@ window._fbSubscribePrices = (callback) => {
   onValue(pricesRef, (snap) => {
     if (snap.exists()) callback(snap.val());
   });
+};
+
+// 현재가 1회 읽기 (접속 시 가격 초기화 방지용)
+window._fbGetCurrentPrices = async () => {
+  const snap = await get(pricesRef);
+  return snap.exists() ? snap.val() : null;
 };
 
 // Firebase 로드 완료 표시
@@ -1417,18 +1427,17 @@ function setDailyTrend() {
   });
 }
 function initStocks() {
-  // 날짜 기준 시드 재초기화 — 모든 유저 동일한 초기 시세
   globalRand = seededRand(getDateSeed());
   STOCK_DEF.forEach(def => {
-    const hist = genHistory(def.base, def.vol, 60, globalRand);
+    const startPrice = Math.round(def.base * (0.8 + globalRand() * 0.4));
     stocks[def.id] = {
       ...def,
-      price: hist[hist.length - 1],
-      openPrice: hist[hist.length - 1],
-      prevClose: hist[hist.length - 1],
-      history: hist,
-      intradayHist: [{ price: hist[hist.length-1], label:'09:00' }],
-      splitCount: 0, // 분할 횟수
+      price: startPrice,
+      openPrice: startPrice,
+      prevClose: startPrice,
+      history: [],        // Realtime DB에서 복원 — 초기값으로 오염 방지
+      intradayHist: [{ price: startPrice, label:'09:00' }],
+      splitCount: 0,
     };
     state.holdings[def.id] = 0;
     state.avgCost[def.id] = 0;
@@ -1467,12 +1476,24 @@ function getTickRand(defIdx) {
   return r();
 }
 
+// Box-Muller용 두 번째 독립 랜덤 (defIdx 오프셋 분리)
+function getTickRand2(defIdx) {
+  const seed = (getDateSeed() * 10000 + gameDay * 1000 + tickCount * 10 + defIdx + 500) >>> 0;
+  const r = seededRand(seed);
+  r(); r();
+  return r();
+}
+
 // BULL 방식 히스토리 생성 — 시드 기반
 function genHistory(base, vol, days, rand) {
   const r = rand || globalRand;
   let arr = [], price = base * (0.8 + r() * 0.4);
   for (let i = 0; i < days; i++) {
-    const d = (r() - 0.48) * vol;
+    // 정규분포 근사 (Box-Muller) + 클리핑으로 급등락 억제
+    const u1 = Math.max(r(), 1e-10), u2 = r();
+    const gauss = Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
+    const rawD = gauss * vol * 0.4;
+    const d = Math.max(-vol * 0.9, Math.min(vol * 0.9, rawD));
     price = Math.max(Math.round(price * (1 + d)), Math.round(base * 0.3));
     arr.push(price);
   }
@@ -1524,11 +1545,28 @@ function tickPrices() {
     const splitMap = {}; // 분할 발생 종목 { id: ratio }
     STOCK_DEF.forEach((def, defIdx) => {
       const s = stocks[def.id];
-      const d = (getTickRand(defIdx) - 0.48) * def.vol;
+
+      // ── 스무딩: Box-Muller 기반 정규분포로 급등락 억제 ──
+      const u1 = getTickRand(defIdx);
+      const u2 = getTickRand2(defIdx);
+      const gauss = Math.sqrt(-2 * Math.log(Math.max(u1, 1e-10))) * Math.cos(2 * Math.PI * u2);
+      // 1-sigma = vol*0.35 (원래보다 완화), 최대 ±2.2sigma 클리핑
+      const rawD = gauss * def.vol * 0.35;
+      const d = Math.max(-def.vol * 0.77, Math.min(def.vol * 0.77, rawD));
+
       const trend = dailyTrend[def.id] || 0; // 오늘의 트렌드
+      // 뉴스 영향은 20틱에 분산 (한 번에 30% → 5%씩 분산)
       let imp = pendingImpacts[def.id] || 0;
-      if (imp) delete pendingImpacts[def.id];
-      const change = d + trend + imp * 0.3;
+      if (imp) {
+        const chunk = imp * 0.05; // 5%씩 분산
+        pendingImpacts[def.id] = imp - chunk;
+        if (Math.abs(pendingImpacts[def.id]) < 0.001) delete pendingImpacts[def.id];
+        imp = chunk;
+      }
+      // 단일 틱 최대 변동 제한: ±vol*1.5
+      const rawChange = d + trend + imp;
+      const maxTick = def.vol * 1.5;
+      const change = Math.max(-maxTick, Math.min(maxTick, rawChange));
       let newPrice = Math.max(Math.round(s.price * (1 + change)), Math.round(def.base * 0.2));
 
       // 등급별 분할 기준
@@ -1563,7 +1601,7 @@ function tickPrices() {
       }
 
       s.price = newPrice;
-      s.history.push(newPrice);
+      // history는 결산(endDay)에서만 push — 틱마다 push하면 1Y 차트 끝에 수직선 발생
       s.intradayHist.push({ price: newPrice, label });
       if (s.intradayHist.length > 500) s.intradayHist.shift();
       priceMap[def.id] = newPrice;
@@ -1593,7 +1631,22 @@ function tickPrices() {
     }
 
     if (window._fbPushPrices) {
-      window._fbPushPrices(priceMap, gameDay, tickCount, splitMap).catch(()=>{});
+      const payload = { prices: priceMap, gameDay, tickCount, splits: splitMap || {} };
+      // 매 틱: intradayHist 포함 (재접속 시 즉시 복원용)
+      // 30틱마다: history 전체도 포함 (1Y 차트 동기화)
+      const intradayData = {};
+      STOCK_DEF.forEach(def => {
+        intradayData[def.id] = stocks[def.id].intradayHist.slice(-500);
+      });
+      payload.intradayHists = intradayData;
+      if (tickCount % 30 === 0) {
+        const histData = {};
+        STOCK_DEF.forEach(def => {
+          histData[def.id] = stocks[def.id].history.slice(-500);
+        });
+        payload.histories = histData;
+      }
+      window._fbPushPrices(payload).catch(()=>{});
     }
   }
   // 일반 유저는 _fbSubscribePrices 콜백으로 수신
@@ -1749,6 +1802,8 @@ function selectStock(id) {
 function renderDetail(id) {
   const s = stocks[id];
   if (!s) return;
+  // canvas가 교체되기 전에 Chart.js 인스턴스를 반드시 해제
+  if (mainChartObj) { mainChartObj.destroy(); mainChartObj = null; }
   const chg = (s.price - s.openPrice) / s.openPrice;
   const chgClass = chg >= 0 ? 'chg-up' : 'chg-dn';
   const risk = getRisk(s.vol);
@@ -1816,19 +1871,30 @@ function updateDetailPrices() {
     el2.textContent = `${fmtPct(chg)} (${sign(s.price-s.openPrice)}${fmtN(s.price - s.openPrice)}원)`;
     el2.className = `dh-chg ${chg>=0?'chg-up':'chg-dn'}`;
   }
+  // mainChartObj 없으면 전체 재렌더 (최초 접속 또는 DOM 교체 후)
+  if (!mainChartObj) { renderMainChart(); return; }
+
   // update chart in-place (line only)
   if (state.chartType === 'line' && mainChartObj) {
     const slice = getChartSlice();
     const isUp = s.price >= s.openPrice;
+
+    // labels도 함께 재계산 (길이 불일치 방지)
+    const step = Math.ceil(slice.length / 6);
+    const labels = slice.map((_, i) => i % step === 0 ? (state.chartPeriod === 1
+      ? (stocks[state.currentTicker].intradayHist[i]?.label || '')
+      : `D-${slice.length - i}`) : '');
+
+    mainChartObj.data.labels = labels;
     mainChartObj.data.datasets[0].data = slice;
     mainChartObj.data.datasets[0].borderColor = isUp ? '#ff3d5a' : '#2196f3';
     mainChartObj.data.datasets[0].backgroundColor = isUp ? 'rgba(255,61,90,0.07)' : 'rgba(33,150,243,0.07)';
-    // 평단가/레버리지 데이터셋 전부 재계산
+
+    // 평단가/레버리지 데이터셋 재계산
     const avg = state.avgCost[state.currentTicker] || 0;
     const hasAvg = state.holdings[state.currentTicker] > 0 && avg > 0;
     const levAvgs = Object.values(state.levHoldings || {})
       .filter(pos => pos.stockId === state.currentTicker);
-    // dataset 1~: 평단가 + 레버리지 평단가
     let dsIdx = 1;
     if (hasAvg && mainChartObj.data.datasets[dsIdx]) {
       mainChartObj.data.datasets[dsIdx].data = slice.map(() => avg);
@@ -1849,7 +1915,10 @@ function updateDetailPrices() {
 function getChartSlice() {
   const s = stocks[state.currentTicker];
   if (state.chartPeriod === 1) return s.intradayHist.map(h => h.price);
-  return s.history.slice(-state.chartPeriod);
+  const hist = s.history.slice(-state.chartPeriod);
+  // history 없으면 intradayHist로 fallback
+  if (hist.length === 0) return s.intradayHist.map(h => h.price);
+  return hist;
 }
 
 // ═══════════════════════════════════════════════
@@ -2688,6 +2757,18 @@ function endDay() {
   window._dayEndFired = true;
   sfxDayEnd();
   uploadRanking();
+  // 마스터: 오늘 종가 1개를 history에 추가 후 Realtime DB + Firestore에 저장
+  if (isMaster) {
+    STOCK_DEF.forEach(def => {
+      stocks[def.id].history.push(stocks[def.id].price);
+      if (stocks[def.id].history.length > 500) stocks[def.id].history.shift();
+    });
+    if (window._fbSaveHistory) {
+      const histData = {};
+      STOCK_DEF.forEach(def => { histData[def.id] = stocks[def.id].history; });
+      window._fbSaveHistory(histData).catch(()=>{});
+    }
+  }
   let count = 5;
   const cdEl = document.getElementById('next-day-countdown');
   if (cdEl) cdEl.textContent = count + '초 후 다음날로…';
@@ -2757,6 +2838,9 @@ async function nextDay() {
     stocks[def.id].openPrice = s.price;
     stocks[def.id].prevClose = s.price;
     stocks[def.id].intradayHist = [{ price: s.price, label:'09:00' }];
+    // history 마지막 값이 어제 종가(s.price)와 다르면 맞춰줌 (차트 연속성 보장)
+    const lastH = s.history[s.history.length - 1];
+    if (lastH !== s.price) stocks[def.id].history.push(s.price);
   });
 
   const newStart = Date.now();
@@ -3705,9 +3789,40 @@ function goHome() {
 }
 
 function bootGame() {
-  // stocks가 비어있으면 항상 initStocks 실행
+  // stocks 초기화 (최초 1회 또는 빈 경우)
   if (Object.keys(stocks).length === 0) initStocks();
-  setDailyTrend(); // 오늘의 트렌드 설정
+  setDailyTrend();
+
+  // 접속 시 Realtime DB 1회 읽기 — 현재가 + intradayHist + history 모두 복원
+  if (window._fbGetCurrentPrices) {
+    window._fbGetCurrentPrices().then(priceData => {
+      if (!priceData || !priceData.prices) return;
+      STOCK_DEF.forEach(def => {
+        const p = priceData.prices[def.id];
+        const op = priceData.prices[def.id + '_open'];
+        if (!p) return;
+        stocks[def.id].price = p;
+        if (op) stocks[def.id].openPrice = op;
+        else stocks[def.id].openPrice = p;
+        stocks[def.id].splitCount = priceData.prices[def.id + '_split'] || 0;
+        // intradayHist 복원 (1D 차트)
+        if (priceData.intradayHists?.[def.id]?.length) {
+          stocks[def.id].intradayHist = priceData.intradayHists[def.id];
+        } else {
+          stocks[def.id].intradayHist = [{ price: p, label: '09:00' }];
+        }
+        // history 복원 (1W/1M/3M/1Y 차트) — 30틱마다 저장된 것
+        if (priceData.histories?.[def.id]?.length) {
+          stocks[def.id].history = priceData.histories[def.id];
+        }
+      });
+      refreshUI();
+      if (currentTab === 'trade' && state.currentTicker) renderDetail(state.currentTicker);
+    }).catch(()=>{});
+  }
+
+  // Realtime DB가 단일 진실 소스 — Firestore history는 결산용으로만 사용
+  // (histories는 _fbGetCurrentPrices에서 이미 복원됨) // 오늘의 트렌드 설정
 
   // 구독은 최초 1회만 등록
   if (!subsInitialized) {
@@ -3736,27 +3851,40 @@ function bootGame() {
         const h = 9 + Math.floor(minEl / 60);
         const m = minEl % 60;
         const label = h + ':' + String(m).padStart(2,'0');
-        const isFirst = STOCK_DEF.every(def => stocks[def.id].intradayHist.length <= 1);
+
+        // 중복 틱 수신 방지
+        const incomingTick = data.tickCount || 0;
+        if (incomingTick > 0 && incomingTick === (window._lastReceivedTick || -1)) return;
+        window._lastReceivedTick = incomingTick;
+
+        // 현재가 / openPrice / splitCount 동기화
         STOCK_DEF.forEach(def => {
           const newPrice = data.prices[def.id];
           const openPrice = data.prices[def.id + '_open'];
           if (!newPrice) return;
           const s = stocks[def.id];
-          if (openPrice) s.openPrice = openPrice;
-          else if (isFirst) s.openPrice = newPrice;
-          s.splitCount = data.prices[def.id + '_split'] || 0;
           s.price = newPrice;
-          // 첫 수신 시 intradayHist + history 리셋 (시드 기반 초기값 제거)
-          if (isFirst) {
-            s.intradayHist = [{ price: newPrice, label: '09:00' }];
-            s.history = s.history.slice(0, -1); // 마지막 시드값 제거
-          }
-          s.history.push(newPrice);
-          s.intradayHist.push({ price: newPrice, label });
-          if (s.intradayHist.length > 500) s.intradayHist.shift();
+          if (openPrice) s.openPrice = openPrice;
+          s.splitCount = data.prices[def.id + '_split'] || 0;
         });
+
+        // intradayHist: 마스터 payload 무조건 교체 (단일 진실 소스)
+        if (data.intradayHists) {
+          STOCK_DEF.forEach(def => {
+            if (data.intradayHists[def.id]?.length)
+              stocks[def.id].intradayHist = data.intradayHists[def.id];
+          });
+        }
+
+        // history: 30틱마다 마스터 것으로 교체 (1W~1Y 차트)
+        if (data.histories) {
+          STOCK_DEF.forEach(def => {
+            if (data.histories[def.id]?.length)
+              stocks[def.id].history = data.histories[def.id];
+          });
+        }
+
         refreshUI();
-        // 차트 바로 업데이트
         if (currentTab === 'trade' && state.currentTicker) updateDetailPrices();
       });
     }
