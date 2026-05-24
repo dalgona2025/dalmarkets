@@ -1765,11 +1765,23 @@ function updateDetailPrices() {
     mainChartObj.data.datasets[0].data = slice;
     mainChartObj.data.datasets[0].borderColor = isUp ? '#ff3d5a' : '#2196f3';
     mainChartObj.data.datasets[0].backgroundColor = isUp ? 'rgba(255,61,90,0.07)' : 'rgba(33,150,243,0.07)';
-    // 평단가/레버리지 라인은 재렌더링으로 처리
+    // 평단가/레버리지 데이터셋 전부 재계산
     const avg = state.avgCost[state.currentTicker] || 0;
-    if (mainChartObj.data.datasets[1]) {
-      mainChartObj.data.datasets[1].data = slice.map(() => avg);
+    const hasAvg = state.holdings[state.currentTicker] > 0 && avg > 0;
+    const levAvgs = Object.values(state.levHoldings || {})
+      .filter(pos => pos.stockId === state.currentTicker);
+    // dataset 1~: 평단가 + 레버리지 평단가
+    let dsIdx = 1;
+    if (hasAvg && mainChartObj.data.datasets[dsIdx]) {
+      mainChartObj.data.datasets[dsIdx].data = slice.map(() => avg);
+      dsIdx++;
     }
+    levAvgs.forEach(pos => {
+      if (mainChartObj.data.datasets[dsIdx]) {
+        mainChartObj.data.datasets[dsIdx].data = slice.map(() => pos.avgCost);
+        dsIdx++;
+      }
+    });
     mainChartObj.update('none');
   } else if (state.chartType === 'candle') {
     renderMainChart();
