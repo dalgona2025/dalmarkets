@@ -460,6 +460,7 @@ body{
   display:flex;align-items:center;gap:8px;
 }
 @keyframes toastIn{from{opacity:0;transform:translateX(20px)}to{opacity:1;transform:none}}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
 .toast.buy{border-left:3px solid var(--red);}
 .toast.sell{border-left:3px solid var(--green);}
 .toast.err{border-left:3px solid var(--amber);}
@@ -836,6 +837,18 @@ window._fbLoadRanking = async () => {
 window._fbSaveHistory = async (historyData) => {
   await setDoc(doc(db, 'market', 'history'), historyData);
 };
+
+// 쿠폰 조회
+window._fbGetCoupon = async (code) => {
+  const snap = await getDoc(doc(db, 'coupons', code));
+  return snap.exists() ? snap.data() : null;
+};
+// 쿠폰 사용 처리 (usedBy 배열에 uid 추가)
+window._fbUseCoupon = async (code, uid, coupon) => {
+  const used = coupon.usedBy || [];
+  used.push(uid);
+  await setDoc(doc(db, 'coupons', code), { ...coupon, usedBy: used });
+};
 // history 불러오기 (일반 유저 접속 시)
 window._fbLoadHistory = async () => {
   const snap = await getDoc(doc(db, 'market', 'history'));
@@ -1040,6 +1053,7 @@ setTimeout(() => {
       <div class="stab active" id="stab-audio"   onclick="setSettingsTab('audio')">🔊 오디오</div>
       <div class="stab"        id="stab-save"    onclick="setSettingsTab('save')">💾 저장</div>
       <div class="stab"        id="stab-account" onclick="setSettingsTab('account')">👤 계정</div>
+      <div class="stab"        id="stab-coupon"  onclick="setSettingsTab('coupon')">🎟 쿠폰</div>
     </div>
 
     <!-- 오디오 탭 -->
@@ -1125,7 +1139,77 @@ setTimeout(() => {
       </div>
     </div>
 
-    <!-- 홈으로 나가기 -->
+    <!-- 쿠폰 탭 -->
+    <div id="spanel-coupon" style="display:none;">
+      <!-- 쿠폰 입력 -->
+      <div style="background:var(--bg3);border:1px solid var(--border2);border-radius:8px;padding:18px;margin-bottom:10px;">
+        <div style="font-size:10px;color:var(--muted);letter-spacing:1.5px;text-transform:uppercase;margin-bottom:4px;">🎟 쿠폰 사용</div>
+        <div style="font-size:11px;color:var(--muted);margin-bottom:14px;">쿠폰 코드를 입력하면 치트가 활성화됩니다. 1회만 사용 가능합니다.</div>
+        <div class="login-field" style="margin-bottom:10px;">
+          <label style="font-family:var(--mono);font-size:10px;color:var(--muted);display:block;margin-bottom:4px;">쿠폰 코드</label>
+          <input class="login-input" id="coupon-input" type="text" placeholder="예: CHEAT2025" autocomplete="off" autocapitalize="characters"
+            onkeydown="if(event.key==='Enter')doUseCoupon()" style="text-transform:uppercase;letter-spacing:2px;">
+        </div>
+        <button onclick="doUseCoupon()" id="coupon-btn"
+          style="width:100%;padding:10px;background:linear-gradient(135deg,#7c3aed,#9c6bff);border:none;border-radius:5px;color:#fff;font-family:var(--sans);font-weight:700;font-size:12px;cursor:pointer;transition:opacity .15s;letter-spacing:.5px;">
+          🎁 쿠폰 사용하기
+        </button>
+        <div id="coupon-msg" style="font-family:var(--mono);font-size:11px;text-align:center;margin-top:10px;min-height:16px;"></div>
+      </div>
+
+      <!-- 치트 패널 (쿠폰 사용 후 표시) -->
+      <div id="cheat-panel" style="display:none;">
+        <div style="font-size:10px;color:var(--purple);letter-spacing:2px;text-transform:uppercase;margin-bottom:10px;display:flex;align-items:center;gap:6px;">
+          <span style="animation:pulse 1.5s infinite">⚡</span> CHEAT MODE ACTIVE
+        </div>
+
+        <!-- 돈 조작 -->
+        <div style="background:var(--bg3);border:1px solid rgba(156,107,255,.3);border-radius:8px;padding:14px;margin-bottom:10px;">
+          <div style="font-size:10px;color:var(--purple);letter-spacing:1px;margin-bottom:10px;">💰 현금 조작</div>
+          <div style="display:flex;gap:6px;margin-bottom:8px;">
+            <input id="cheat-cash-amount" type="number" placeholder="금액 (예: 10000000)"
+              style="flex:1;background:var(--bg4);border:1px solid rgba(156,107,255,.3);border-radius:4px;color:var(--text);font-family:var(--mono);font-size:12px;padding:7px 10px;outline:none;">
+          </div>
+          <div style="display:flex;gap:6px;">
+            <button onclick="cheatAddCash(1)"
+              style="flex:1;padding:8px;background:rgba(255,61,90,.12);border:1px solid rgba(255,61,90,.3);border-radius:4px;color:var(--red);font-family:var(--mono);font-size:11px;cursor:pointer;font-weight:700;">
+              + 추가
+            </button>
+            <button onclick="cheatAddCash(-1)"
+              style="flex:1;padding:8px;background:rgba(33,150,243,.12);border:1px solid rgba(33,150,243,.3);border-radius:4px;color:var(--green);font-family:var(--mono);font-size:11px;cursor:pointer;font-weight:700;">
+              − 차감
+            </button>
+          </div>
+          <div id="cheat-cash-msg" style="font-family:var(--mono);font-size:10px;color:var(--muted);margin-top:6px;min-height:14px;"></div>
+        </div>
+
+        <!-- 주가 조작 -->
+        <div style="background:var(--bg3);border:1px solid rgba(156,107,255,.3);border-radius:8px;padding:14px;">
+          <div style="font-size:10px;color:var(--purple);letter-spacing:1px;margin-bottom:10px;">📈 주가 조작</div>
+          <div style="display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap;">
+            <select id="cheat-stock-sel"
+              style="flex:1;min-width:120px;background:var(--bg4);border:1px solid rgba(156,107,255,.3);border-radius:4px;color:var(--text);font-family:var(--mono);font-size:11px;padding:7px 8px;outline:none;">
+            </select>
+            <input id="cheat-price-pct" type="number" placeholder="% (예: 50 또는 -30)"
+              style="width:110px;background:var(--bg4);border:1px solid rgba(156,107,255,.3);border-radius:4px;color:var(--text);font-family:var(--mono);font-size:12px;padding:7px 10px;outline:none;">
+          </div>
+          <div style="display:flex;gap:6px;margin-bottom:8px;">
+            <button onclick="cheatSetPrice()"
+              style="flex:1;padding:8px;background:rgba(156,107,255,.15);border:1px solid rgba(156,107,255,.4);border-radius:4px;color:var(--purple);font-family:var(--mono);font-size:11px;cursor:pointer;font-weight:700;">
+              ⚡ 주가 변경 (%)
+            </button>
+          </div>
+          <div style="display:flex;gap:4px;flex-wrap:wrap;">
+            <button onclick="cheatPriceQuick(10)"  style="flex:1;padding:5px 4px;background:rgba(255,61,90,.1);border:1px solid rgba(255,61,90,.25);border-radius:3px;color:var(--red);font-family:var(--mono);font-size:10px;cursor:pointer;">+10%</button>
+            <button onclick="cheatPriceQuick(30)"  style="flex:1;padding:5px 4px;background:rgba(255,61,90,.1);border:1px solid rgba(255,61,90,.25);border-radius:3px;color:var(--red);font-family:var(--mono);font-size:10px;cursor:pointer;">+30%</button>
+            <button onclick="cheatPriceQuick(100)" style="flex:1;padding:5px 4px;background:rgba(255,61,90,.1);border:1px solid rgba(255,61,90,.25);border-radius:3px;color:var(--red);font-family:var(--mono);font-size:10px;cursor:pointer;">+100%</button>
+            <button onclick="cheatPriceQuick(-30)" style="flex:1;padding:5px 4px;background:rgba(33,150,243,.1);border:1px solid rgba(33,150,243,.25);border-radius:3px;color:var(--green);font-family:var(--mono);font-size:10px;cursor:pointer;">-30%</button>
+            <button onclick="cheatPriceQuick(-50)" style="flex:1;padding:5px 4px;background:rgba(33,150,243,.1);border:1px solid rgba(33,150,243,.25);border-radius:3px;color:var(--green);font-family:var(--mono);font-size:10px;cursor:pointer;">-50%</button>
+          </div>
+          <div id="cheat-price-msg" style="font-family:var(--mono);font-size:10px;color:var(--muted);margin-top:6px;min-height:14px;"></div>
+        </div>
+      </div>
+    </div>
     <div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--border);">
       <button onclick="goHome()" style="width:100%;padding:10px;background:transparent;border:1px solid var(--border2);border-radius:5px;color:var(--muted);font-family:var(--mono);font-size:11px;cursor:pointer;transition:all .15s;letter-spacing:.5px;"
         onmouseover="this.style.borderColor='var(--accent2)';this.style.color='var(--text)'"
@@ -3202,7 +3286,7 @@ function closeSettings() {
   document.getElementById('settings-modal').classList.remove('show');
 }
 function setSettingsTab(tab) {
-  ['audio','save','account'].forEach(t => {
+  ['audio','save','account','coupon'].forEach(t => {
     document.getElementById('stab-'+t).classList.toggle('active', t===tab);
     document.getElementById('spanel-'+t).style.display = t===tab ? 'block' : 'none';
   });
@@ -3282,6 +3366,111 @@ async function doSwitchAccount() {
 function doLogoutFromSettings() {
   closeSettings();
   doLogout();
+}
+
+// ── 치트 상태 ──
+let cheatActive = false;
+
+function activateCheat() {
+  cheatActive = true;
+  const panel = document.getElementById('cheat-panel');
+  if (!panel) return;
+  panel.style.display = 'block';
+  // 주가 조작 셀렉트 목록 채우기
+  const sel = document.getElementById('cheat-stock-sel');
+  if (sel && sel.options.length === 0) {
+    STOCK_DEF.forEach(def => {
+      const opt = document.createElement('option');
+      opt.value = def.id;
+      opt.textContent = def.name + ' (' + def.id + ')';
+      sel.appendChild(opt);
+    });
+  }
+}
+
+async function doUseCoupon() {
+  const input = document.getElementById('coupon-input');
+  const msgEl = document.getElementById('coupon-msg');
+  const btn   = document.getElementById('coupon-btn');
+  const code  = (input.value || '').trim().toUpperCase();
+
+  msgEl.style.color = 'var(--muted)';
+  if (!code) { msgEl.style.color='var(--red)'; msgEl.textContent = '쿠폰 코드를 입력해주세요.'; return; }
+  if (!currentUser) { msgEl.style.color='var(--red)'; msgEl.textContent = '로그인이 필요합니다.'; return; }
+  if (!window._fbGetCoupon) { msgEl.style.color='var(--red)'; msgEl.textContent = 'Firebase 연결 중...'; return; }
+
+  btn.disabled = true; btn.textContent = '확인 중…';
+  msgEl.textContent = '';
+  try {
+    const coupon = await window._fbGetCoupon(code);
+    if (!coupon) {
+      msgEl.style.color = 'var(--red)'; msgEl.textContent = '❌ 존재하지 않는 쿠폰입니다.';
+      btn.disabled = false; btn.textContent = '🎁 쿠폰 사용하기'; return;
+    }
+    if (coupon.usedBy && coupon.usedBy.includes(currentUser.uid)) {
+      // 이미 사용했어도 치트는 그냥 열어줌 (자기 계정이니까)
+      msgEl.style.color = 'var(--amber)'; msgEl.textContent = '⚠️ 이미 사용한 쿠폰 — 치트 패널 열림';
+      activateCheat();
+      btn.disabled = false; btn.textContent = '🎁 쿠폰 사용하기'; return;
+    }
+    // 사용 처리
+    await window._fbUseCoupon(code, currentUser.uid, coupon);
+    input.value = '';
+    msgEl.style.color = 'var(--purple)';
+    msgEl.textContent = '⚡ 치트 활성화!';
+    showToast('buy', '⚡ CHEAT MODE ON');
+    activateCheat();
+  } catch(e) {
+    msgEl.style.color = 'var(--red)'; msgEl.textContent = '오류: ' + e.message;
+  }
+  btn.disabled = false; btn.textContent = '🎁 쿠폰 사용하기';
+}
+
+// ── 치트: 현금 조작 ──
+function cheatAddCash(sign) {
+  if (!cheatActive) return;
+  const amtEl = document.getElementById('cheat-cash-amount');
+  const msgEl = document.getElementById('cheat-cash-msg');
+  const amt = parseInt(amtEl.value || '0');
+  if (!amt || amt <= 0) { msgEl.style.color='var(--red)'; msgEl.textContent = '금액을 입력해주세요.'; return; }
+  state.cash += sign * amt;
+  if (state.cash < 0) state.cash = 0;
+  refreshUI();
+  autoSave();
+  msgEl.style.color = sign > 0 ? 'var(--red)' : 'var(--green)';
+  msgEl.textContent = (sign > 0 ? '+' : '-') + fmtMoney(amt) + ' 완료 → 현재 ' + fmtMoney(state.cash);
+  showToast('buy', `💰 현금 ${sign>0?'+':'-'}${fmtMoney(amt)}`);
+}
+
+// ── 치트: 주가 조작 ──
+function cheatSetPrice() {
+  if (!cheatActive) return;
+  const sel    = document.getElementById('cheat-stock-sel');
+  const pctEl  = document.getElementById('cheat-price-pct');
+  const msgEl  = document.getElementById('cheat-price-msg');
+  const id     = sel.value;
+  const pct    = parseFloat(pctEl.value || '0');
+  if (!id || isNaN(pct) || pct === 0) { msgEl.style.color='var(--red)'; msgEl.textContent = '종목과 %를 입력해주세요.'; return; }
+  const s = stocks[id];
+  if (!s) return;
+  const before = s.price;
+  s.price = Math.max(1, Math.round(s.price * (1 + pct / 100)));
+  s.openPrice = s.openPrice || before; // openPrice는 유지
+  // intradayHist에 추가
+  s.intradayHist = s.intradayHist || [];
+  s.intradayHist.push({ price: s.price, label: '치트' });
+  refreshUI();
+  if (currentTab === 'trade' && state.currentTicker === id) renderDetail(id);
+  msgEl.style.color = pct > 0 ? 'var(--red)' : 'var(--green)';
+  const def = STOCK_DEF.find(d => d.id === id);
+  msgEl.textContent = `${def.name} ${fmtN(before)} → ${fmtN(s.price)} (${pct>0?'+':''}${pct}%)`;
+  showToast('buy', `📈 ${def.name} 주가 ${pct>0?'+':''}${pct}%`);
+}
+
+function cheatPriceQuick(pct) {
+  if (!cheatActive) return;
+  document.getElementById('cheat-price-pct').value = pct;
+  cheatSetPrice();
 }
 
 function switchToGuest() {
