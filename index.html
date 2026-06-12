@@ -1303,14 +1303,17 @@ setTimeout(() => {
           <button class="btn-lev buy" onclick="doLevBuy()">매수</button>
           <button class="btn-lev sell" onclick="doLevSell()">매도</button>
         </div>
-        <div class="lev-positions" id="lev-positions"></div>
       </div>
     </div>
 
-    <!-- 보유종목 + 레버리지 포지션 (거래내역 없음) -->
+    <!-- 보유종목 + 레버리지 포지션 통합 -->
     <div id="holdings-panel">
       <div class="op-title">보유 종목</div>
       <div id="holdings-list"><div style="color:var(--muted);font-size:11px;padding:6px 0;">보유 중인 종목이 없습니다</div></div>
+      <div id="holdings-lev-section" style="display:none;">
+        <div class="op-title" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);">레버리지</div>
+        <div id="holdings-lev-list"></div>
+      </div>
     </div>
   </div>
 </div>
@@ -1399,7 +1402,7 @@ let state = {
   watchlist: [],
   currentTicker: null,
   tradeTab: 'buy',
-  chartPeriod: 30,
+  chartPeriod: 'all',
   chartType: 'line',
   prevDayTotal: INIT_CASH, // 전날 총자산 (일일 손익 계산용)
 };
@@ -1633,24 +1636,36 @@ function tickPrices() {
     if (window._fbPushPrices) {
       const payload = { prices: priceMap, gameDay, tickCount, splits: splitMap || {} };
       // 매 틱: intradayHist 포함 (재접속 시 즉시 복원용)
-      // 30틱마다: history 전체도 포함 (1Y 차트 동기화)
       const intradayData = {};
       STOCK_DEF.forEach(def => {
         intradayData[def.id] = stocks[def.id].intradayHist.slice(-500);
       });
       payload.intradayHists = intradayData;
-      if (tickCount % 30 === 0) {
-        const histData = {};
-        STOCK_DEF.forEach(def => {
-          histData[def.id] = stocks[def.id].history.slice(-500);
-        });
-        payload.histories = histData;
-      }
       window._fbPushPrices(payload).catch(()=>{});
     }
   }
+  // 강제청산: 레버리지 손실 -100% 도달 시 즉시 포지션 제거
+  checkLevLiquidation();
   // 일반 유저는 _fbSubscribePrices 콜백으로 수신
   refreshUI();
+}
+
+// ═══════════════════════════════════════════════
+// 강제청산 체크
+// ═══════════════════════════════════════════════
+function checkLevLiquidation() {
+  Object.keys(state.levHoldings || {}).forEach(key => {
+    const pos = state.levHoldings[key];
+    const cur = latestPrice(pos.stockId);
+    const pct = (cur - pos.avgCost) / pos.avgCost;
+    const dir = pos.type === 'inverse' ? -1 : 1;
+    const pnlRate = dir * pct * pos.mult;
+    if (pnlRate <= -1) {
+      // 원금 전액 손실 — 포지션 즉시 제거 (현금 환급 없음)
+      delete state.levHoldings[key];
+      showToast('err', `💥 ${pos.name} ${pos.type === 'inverse' ? '인버스' : '레버리지'} ×${pos.mult} 강제청산`);
+    }
+  });
 }
 
 // ═══════════════════════════════════════════════
@@ -1667,8 +1682,6 @@ function refreshUI() {
   if (currentTab === 'watchlist') renderWatchlist();
   renderHoldings();
   updateOrderPanel();
-  updateLevInfo();
-  renderLevPositions();
   renderTickerBar();
 }
 
@@ -1795,7 +1808,12 @@ function sparklineSVG(vals, openPrice, W, H) {
 function selectStock(id) {
   state.currentTicker = id;
   renderSidebar();
-  if (currentTab === 'trade') renderDetail(id);
+  // 어느 탭에서든 매매탭으로 이동
+  if (currentTab !== 'trade') {
+    switchTab('trade', null);
+  } else {
+    renderDetail(id);
+  }
   updateOrderPanel();
 }
 
@@ -1828,12 +1846,10 @@ function renderDetail(id) {
 
     <div class="chart-controls">
       <div class="period-row">
-        <button class="per-btn ${state.chartPeriod===1?'active':''}" onclick="setPeriod(1,this)">1D</button>
-        <button class="per-btn ${state.chartPeriod===7?'active':''}" onclick="setPeriod(7,this)">1W</button>
-        <button class="per-btn ${state.chartPeriod===30?'active':''}" onclick="setPeriod(30,this)">1M</button>
-        <button class="per-btn ${state.chartPeriod===90?'active':''}" onclick="setPeriod(90,this)">3M</button>
-        <button class="per-btn ${state.chartPeriod===180?'active':''}" onclick="setPeriod(180,this)">6M</button>
-        <button class="per-btn ${state.chartPeriod===365?'active':''}" onclick="setPeriod(365,this)">1Y</button>
+        <button class="per-btn ${state.chartPeriod==='all'?'active':''}" onclick="setPeriod('all',this)">전체</button>
+        <button class="per-btn ${state.chartPeriod===180?'active':''}" onclick="setPeriod(180,this)">3H</button>
+        <button class="per-btn ${state.chartPeriod===60?'active':''}" onclick="setPeriod(60,this)">1H</button>
+        <button class="per-btn ${state.chartPeriod===30?'active':''}" onclick="setPeriod(30,this)">30M</button>
       </div>
       <div class="chart-type-toggle">
         <button class="ct-btn ${state.chartType==='line'?'active':''}" onclick="setChartType('line',this)">📈 라인</button>
@@ -1877,16 +1893,14 @@ function updateDetailPrices() {
   // update chart in-place (line only)
   if (state.chartType === 'line' && mainChartObj) {
     const slice = getChartSlice();
+    const prices = slice.map(h => h.price);
     const isUp = s.price >= s.openPrice;
 
-    // labels도 함께 재계산 (길이 불일치 방지)
     const step = Math.ceil(slice.length / 6);
-    const labels = slice.map((_, i) => i % step === 0 ? (state.chartPeriod === 1
-      ? (stocks[state.currentTicker].intradayHist[i]?.label || '')
-      : `D-${slice.length - i}`) : '');
+    const labels = slice.map((h, i) => i % step === 0 ? (h.label || '') : '');
 
     mainChartObj.data.labels = labels;
-    mainChartObj.data.datasets[0].data = slice;
+    mainChartObj.data.datasets[0].data = prices;
     mainChartObj.data.datasets[0].borderColor = isUp ? '#ff3d5a' : '#2196f3';
     mainChartObj.data.datasets[0].backgroundColor = isUp ? 'rgba(255,61,90,0.07)' : 'rgba(33,150,243,0.07)';
 
@@ -1897,12 +1911,12 @@ function updateDetailPrices() {
       .filter(pos => pos.stockId === state.currentTicker);
     let dsIdx = 1;
     if (hasAvg && mainChartObj.data.datasets[dsIdx]) {
-      mainChartObj.data.datasets[dsIdx].data = slice.map(() => avg);
+      mainChartObj.data.datasets[dsIdx].data = prices.map(() => avg);
       dsIdx++;
     }
     levAvgs.forEach(pos => {
       if (mainChartObj.data.datasets[dsIdx]) {
-        mainChartObj.data.datasets[dsIdx].data = slice.map(() => pos.avgCost);
+        mainChartObj.data.datasets[dsIdx].data = prices.map(() => pos.avgCost);
         dsIdx++;
       }
     });
@@ -1914,11 +1928,19 @@ function updateDetailPrices() {
 
 function getChartSlice() {
   const s = stocks[state.currentTicker];
-  if (state.chartPeriod === 1) return s.intradayHist.map(h => h.price);
-  const hist = s.history.slice(-state.chartPeriod);
-  // history 없으면 intradayHist로 fallback
-  if (hist.length === 0) return s.intradayHist.map(h => h.price);
-  return hist;
+  const hist = s.intradayHist;
+  if (state.chartPeriod === 'all' || !hist.length) return hist;
+
+  // 현재 마지막 레이블 시각 기준으로 N분 전 이후만 반환
+  const lastLabel = hist[hist.length - 1]?.label || '09:00';
+  const toMins = label => {
+    const [h, m] = label.split(':').map(Number);
+    return h * 60 + m;
+  };
+  const nowMins = toMins(lastLabel);
+  const fromMins = nowMins - state.chartPeriod;
+  const result = hist.filter(h => toMins(h.label) >= fromMins);
+  return result.length > 1 ? result : hist;
 }
 
 // ═══════════════════════════════════════════════
@@ -1937,10 +1959,9 @@ function renderMainChart() {
   if (state.chartType === 'line') {
     const lineC = isUp ? '#ff3d5a' : '#2196f3';
     const fillC = isUp ? 'rgba(255,61,90,0.07)' : 'rgba(33,150,243,0.07)';
+    const prices = slice.map(h => h.price);
     const step = Math.ceil(slice.length / 6);
-    const labels = slice.map((_, i) => i % step === 0 ? (state.chartPeriod===1
-      ? stocks[state.currentTicker].intradayHist[i]?.label || ''
-      : `D-${slice.length-i}`) : '');
+    const labels = slice.map((h, i) => i % step === 0 ? (h.label || '') : '');
     canvas.style.width = '100%';
     canvas.style.height = '180px';
     const ctx = canvas.getContext('2d');
@@ -1962,7 +1983,7 @@ function renderMainChart() {
         labels,
         datasets: [
           {
-            data: slice,
+            data: prices,
             borderColor: lineC,
             backgroundColor: fillC,
             borderWidth: 2,
@@ -1973,7 +1994,7 @@ function renderMainChart() {
           },
           // 일반 평단가 가로선
           ...(hasAvg ? [{
-            data: slice.map(() => avgCost),
+            data: prices.map(() => avgCost),
             borderColor: 'rgba(255,214,0,0.7)',
             backgroundColor: 'transparent',
             borderWidth: 1.5,
@@ -1985,7 +2006,7 @@ function renderMainChart() {
           }] : []),
           // 레버리지 평단가 가로선들
           ...levAvgs.map(lev => ({
-            data: slice.map(() => lev.avg),
+            data: prices.map(() => lev.avg),
             borderColor: lev.color,
             backgroundColor: 'transparent',
             borderWidth: 1.5,
@@ -2031,14 +2052,15 @@ function renderMainChart() {
     const cH = H - PAD_T - PAD_B;
 
     // 캔들 수 결정: 화면에 딱 맞게 그룹핑
+    const prices = slice.map(h => h.price);
     const maxCandles = Math.floor(cW / 8);
-    const grp = Math.max(1, Math.ceil(slice.length / maxCandles));
+    const grp = Math.max(1, Math.ceil(prices.length / maxCandles));
     const candles = [];
-    for (let i = 0; i < slice.length; i += grp) {
-      const chunk = slice.slice(i, Math.min(i + grp, slice.length));
+    for (let i = 0; i < prices.length; i += grp) {
+      const chunk = prices.slice(i, Math.min(i + grp, prices.length));
       if (!chunk.length) continue;
       // grp=1이면 이전 캔들 종가를 시가로 사용해 doji 방지
-      const open = (grp === 1 && i > 0) ? slice[i-1] : chunk[0];
+      const open = (grp === 1 && i > 0) ? prices[i-1] : chunk[0];
       const close = chunk[chunk.length - 1];
       candles.push({
         o: open,
@@ -2098,9 +2120,7 @@ function renderMainChart() {
       // X축 레이블
       if (i % xStep === 0) {
         ctx.fillStyle = '#4a6080'; ctx.font = '9px Space Mono,monospace'; ctx.textAlign = 'center';
-        const label = state.chartPeriod === 1
-          ? (stocks[state.currentTicker].intradayHist[c.idx]?.label || '')
-          : `D-${slice.length - c.idx}`;
+        const label = slice[c.idx]?.label || '';
         ctx.fillText(label, x, H - 6);
       }
     });
@@ -2126,11 +2146,42 @@ function renderMainChart() {
       canvas._tip.innerHTML = `시: ${fmtN(c.o)}<br>고: <span style="color:#ff3d5a">${fmtN(c.h)}</span><br>저: <span style="color:#2196f3">${fmtN(c.l)}</span><br>종: ${fmtN(c.c)}`;
     };
     canvas.onmouseleave = () => { canvas._tip?.remove(); canvas._tip = null; };
+
+    // 평단가 수평선 (캔들 모드)
+    const avgCost = state.avgCost[state.currentTicker] || 0;
+    const hasAvg = state.holdings[state.currentTicker] > 0 && avgCost > 0;
+    if (hasAvg) {
+      const ay = toY(avgCost);
+      ctx.save();
+      ctx.strokeStyle = 'rgba(255,214,0,0.75)';
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([5, 4]);
+      ctx.beginPath(); ctx.moveTo(PAD_L, ay); ctx.lineTo(W - PAD_R, ay); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = 'rgba(255,214,0,0.85)';
+      ctx.font = '9px Space Mono,monospace'; ctx.textAlign = 'left';
+      ctx.fillText('평단 ' + fmtN(avgCost), PAD_L + 3, ay - 3);
+      ctx.restore();
+    }
+    // 레버리지 평단가 수평선
+    Object.values(state.levHoldings || {}).filter(pos => pos.stockId === state.currentTicker).forEach(pos => {
+      const ly = toY(pos.avgCost);
+      const lc = pos.type === 'inverse' ? 'rgba(77,159,255,0.75)' : 'rgba(255,160,0,0.75)';
+      const label = (pos.type === 'inverse' ? 'INV' : 'LEV') + '×' + pos.mult + ' ' + fmtN(pos.avgCost);
+      ctx.save();
+      ctx.strokeStyle = lc; ctx.lineWidth = 1.5;
+      ctx.setLineDash([3, 3]);
+      ctx.beginPath(); ctx.moveTo(PAD_L, ly); ctx.lineTo(W - PAD_R, ly); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = lc; ctx.font = '9px Space Mono,monospace'; ctx.textAlign = 'left';
+      ctx.fillText(label, PAD_L + 3, ly - 3);
+      ctx.restore();
+    });
   }
 }
 
-function setPeriod(days, btn) {
-  state.chartPeriod = days;
+function setPeriod(period, btn) {
+  state.chartPeriod = period;
   document.querySelectorAll('.per-btn').forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
   renderMainChart();
@@ -2320,7 +2371,7 @@ function setRpTab(tab) {
   document.getElementById('rpt-lev').classList.toggle('lev', true);
   document.getElementById('normal-trade').style.display = tab==='normal' ? 'block' : 'none';
   document.getElementById('lev-trade').style.display   = tab==='lev'    ? 'block' : 'none';
-  if (tab==='lev') { updateLevInfo(); renderLevPositions(); }
+  if (tab==='lev') { updateLevInfo(); }
 }
 function switchToLev()    { setRpTab('lev'); }
 function switchToNormal() { setRpTab('normal'); }
@@ -2411,7 +2462,7 @@ function doLevBuy() {
   h.qty += qty;
   addTx('buy', s.id, s.name, qty, s.price, cost, { lev:levState.mult, levType:levState.type });
   document.getElementById('cash-badge').textContent = fmt(state.cash);
-  renderHoldings(); renderLevPositions(); updateLevInfo();
+  renderHoldings(); updateLevInfo();
   sfxBuy();
   showToast('buy', `${s.name} ${levState.type==='inverse'?'인버스':'레버리지'} ×${levState.mult} ${fmtN(qty)}주 매수`);
   if (state.chartType === 'line' && mainChartObj) renderMainChart();
@@ -2434,56 +2485,68 @@ function doLevSell() {
   const pnl = payout - h.avgCost*qty;
   addTx('sell', s.id, s.name, qty, s.price, payout, { lev:levState.mult, levType:levState.type });
   document.getElementById('cash-badge').textContent = fmt(state.cash);
-  renderHoldings(); renderLevPositions(); updateLevInfo();
+  renderHoldings(); updateLevInfo();
   sfxSell();
   showToast(pnl>=0?'buy':'sell', `${s.name} 레버리지 매도 ${pnl>=0?'+':''}${fmt(Math.round(pnl))}`);
   if (state.chartType === 'line' && mainChartObj) renderMainChart();
   autoSave();
 }
-function renderLevPositions() {
-  const wrap = document.getElementById('lev-positions');
-  if (!wrap) return;
-  const keys = Object.keys(state.levHoldings||{});
-  if (!keys.length) { wrap.innerHTML='<div style="font-size:10px;color:var(--muted);padding:6px 0;">보유 레버리지 없음</div>'; return; }
-  wrap.innerHTML = keys.map(key => {
-    const pos = state.levHoldings[key];
-    const cur = latestPrice(pos.stockId);
-    const pct = (cur - pos.avgCost) / pos.avgCost;
-    const dir = pos.type==='inverse' ? -1 : 1;
-    const pnl = Math.round(pos.avgCost*pos.qty*dir*pct*pos.mult);
-    const isUp = pnl >= 0;
-    return `<div class="lev-pos-item">
-      <span class="lev-pos-badge ${pos.type}">${pos.type==='inverse'?'INV':'LEV'} ×${pos.mult}</span>
-      <div style="flex:1;"><div style="font-size:11px;">${pos.name}</div><div style="font-size:9px;color:var(--muted);">${fmtN(pos.qty)}주 · 평균 ${fmtN(pos.avgCost)}</div></div>
-      <div style="text-align:right;"><div class="${isUp?'chg-up':'chg-dn'}" style="font-size:11px;">${pnl>=0?'+':''}${fmt(Math.abs(pnl))}</div></div>
-    </div>`;
-  }).join('');
-}
-
 // ═══════════════════════════════════════════════
 // HOLDINGS (right panel)
 // ═══════════════════════════════════════════════
 function renderHoldings() {
   const el = document.getElementById('holdings-list');
   const entries = STOCK_DEF.filter(def => state.holdings[def.id] > 0);
-  if (!entries.length) { el.innerHTML='<div style="color:var(--muted);font-size:11px;padding:6px 0;">보유 중인 종목이 없습니다</div>'; return; }
-  el.innerHTML = entries.map(def => {
-    const s = stocks[def.id];
-    const qty = state.holdings[def.id];
-    const val = s.price * qty;
-    const pnl = (s.price - state.avgCost[def.id]) * qty;
-    const chgClass = pnl >= 0 ? 'chg-up' : 'chg-dn';
-    return `<div class="holding-item" onclick="selectStock('${def.id}')">
-      <div>
-        <div class="holding-ticker" style="color:${def.color}">${def.id}</div>
-        <div class="holding-qty">${qty}주</div>
-      </div>
-      <div style="text-align:right;">
-        <div class="holding-val">${fmtMoney(val)}</div>
-        <div class="holding-pnl ${chgClass}">${pnl>=0?'+':''}${fmt(pnl)}</div>
-      </div>
-    </div>`;
-  }).join('');
+  if (!entries.length) {
+    el.innerHTML = '<div style="color:var(--muted);font-size:11px;padding:6px 0;">보유 중인 종목이 없습니다</div>';
+  } else {
+    el.innerHTML = entries.map(def => {
+      const s = stocks[def.id];
+      const qty = state.holdings[def.id];
+      const val = s.price * qty;
+      const pnl = (s.price - state.avgCost[def.id]) * qty;
+      const chgClass = pnl >= 0 ? 'chg-up' : 'chg-dn';
+      return `<div class="holding-item" onclick="selectStock('${def.id}')">
+        <div>
+          <div class="holding-ticker" style="color:${def.color}">${def.id}</div>
+          <div class="holding-qty">${qty}주</div>
+        </div>
+        <div style="text-align:right;">
+          <div class="holding-val">${fmtMoney(val)}</div>
+          <div class="holding-pnl ${chgClass}">${pnl>=0?'+':''}${fmt(pnl)}</div>
+        </div>
+      </div>`;
+    }).join('');
+  }
+
+  // 레버리지 섹션
+  const levSection = document.getElementById('holdings-lev-section');
+  const levList = document.getElementById('holdings-lev-list');
+  if (!levSection || !levList) return;
+  const keys = Object.keys(state.levHoldings || {});
+  if (!keys.length) {
+    levSection.style.display = 'none';
+  } else {
+    levSection.style.display = 'block';
+    levList.innerHTML = keys.map(key => {
+      const pos = state.levHoldings[key];
+      const cur = latestPrice(pos.stockId);
+      const pct = (cur - pos.avgCost) / pos.avgCost;
+      const dir = pos.type === 'inverse' ? -1 : 1;
+      const pnl = Math.round(pos.avgCost * pos.qty * dir * pct * pos.mult);
+      const isUp = pnl >= 0;
+      return `<div class="lev-pos-item" onclick="selectStock('${pos.stockId}')">
+        <span class="lev-pos-badge ${pos.type}">${pos.type==='inverse'?'INV':'LEV'} ×${pos.mult}</span>
+        <div style="flex:1;">
+          <div style="font-size:11px;">${pos.name}</div>
+          <div style="font-size:9px;color:var(--muted);">${fmtN(pos.qty)}주 · 평균 ${fmtN(pos.avgCost)}</div>
+        </div>
+        <div style="text-align:right;">
+          <div class="${isUp?'chg-up':'chg-dn'}" style="font-size:11px;">${pnl>=0?'+':''}${fmt(Math.abs(pnl))}</div>
+        </div>
+      </div>`;
+    }).join('');
+  }
 }
 
 // ═══════════════════════════════════════════════
@@ -2628,7 +2691,7 @@ function updateAssetsData() {
   const logEl = document.getElementById('a-log-body');
   if (logEl) {
     logEl.innerHTML = todayTrades.length
-      ? todayTrades.slice().reverse().map(t => `<div class="tl-row"><span class="${t.type==='buy'?'tl-buy':'tl-sell'}">${t.type==='buy'?'매수':'매도'}${t.lev?` ×${t.lev}`:''}</span><span style="color:var(--muted)">${t.ticker}</span><span style="font-family:var(--mono)">${t.qty}주</span><span style="font-family:var(--mono)">${fmtN(t.price)}원</span><span style="font-family:var(--mono);color:${t.type==='buy'?'var(--red)':'var(--green)'}">${t.type==='buy'?'-':'+'}${fmtMoney(t.total)}</span></div>`).join('')
+      ? todayTrades.map(t => `<div class="tl-row"><span class="${t.type==='buy'?'tl-buy':'tl-sell'}">${t.type==='buy'?'매수':'매도'}${t.lev?` ×${t.lev}`:''}</span><span style="color:var(--muted)">${t.ticker}</span><span style="font-family:var(--mono)">${t.qty}주</span><span style="font-family:var(--mono)">${fmtN(t.price)}원</span><span style="font-family:var(--mono);color:${t.type==='buy'?'var(--red)':'var(--green)'}">${t.type==='buy'?'-':'+'}${fmtMoney(t.total)}</span></div>`).join('')
       : '<div style="color:var(--muted);font-size:11px;padding:8px 0;">오늘 거래 내역이 없습니다</div>';
   }
 
@@ -3719,7 +3782,7 @@ function initAuth() {
           state.txLog        = data.txLog || [];
           state.watchlist    = data.watchlist || [];
           state.currentTicker = data.currentTicker || null;
-          state.chartPeriod  = data.chartPeriod || 30;
+          state.chartPeriod  = data.chartPeriod || 'all';
           state.chartType    = data.chartType || 'line';
           state.prevDayTotal = data.prevDayTotal || INIT_CASH;
           gameDay = data.gameDay || 1;
