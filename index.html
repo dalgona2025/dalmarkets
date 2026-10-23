@@ -252,7 +252,7 @@ body{
 #chart-wrap{
   background:var(--bg3);border:1px solid var(--border);
   border-radius:var(--card-r);padding:12px;margin-bottom:14px;
-  height:220px;position:relative;overflow:hidden;
+  min-height:220px;position:relative;overflow:hidden;
 }
 #chart-wrap canvas{display:block;}
 
@@ -433,7 +433,6 @@ body{
 .lev-pos-badge.inverse{background:rgba(77,159,255,.12);color:var(--blue);}
 
 /* holdings */
-#holdings-panel{flex:1;overflow-y:auto;padding:14px;}
 .holding-item{
   display:flex;justify-content:space-between;align-items:center;
   padding:7px 0;border-bottom:1px solid var(--border);cursor:pointer;
@@ -460,7 +459,6 @@ body{
   display:flex;align-items:center;gap:8px;
 }
 @keyframes toastIn{from{opacity:0;transform:translateX(20px)}to{opacity:1;transform:none}}
-@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
 .toast.buy{border-left:3px solid var(--red);}
 .toast.sell{border-left:3px solid var(--green);}
 .toast.err{border-left:3px solid var(--amber);}
@@ -697,12 +695,13 @@ body{
 #settings-modal.show{display:flex;}
 .settings-box{
   background:var(--bg2);border:1px solid var(--border2);
-  border-radius:10px;padding:28px;width:340px;
+  border-radius:10px;width:340px;
   box-shadow:0 0 60px rgba(0,200,255,.1);
+  max-height:82vh;display:flex;flex-direction:column;overflow:hidden;
 }
 .settings-box h3{
   font-family:var(--mono);color:var(--accent);font-size:13px;
-  letter-spacing:3px;margin-bottom:20px;
+  letter-spacing:3px;margin:0;
 }
 .settings-row{
   display:flex;align-items:center;justify-content:space-between;
@@ -773,6 +772,28 @@ body{
 /* 홈 전환 애니메이션 */
 #home-screen.fade-out{animation:homeOut .6s ease forwards;}
 @keyframes homeOut{to{opacity:0;transform:scale(1.04);}}
+
+/* ── MOBILE ── */
+@media (max-width:768px){
+  html,body{height:auto;min-height:100%;overflow-x:hidden;overflow-y:auto;-webkit-overflow-scrolling:touch;}
+  #topbar{height:auto;flex-wrap:wrap;padding:8px 10px;gap:6px;position:relative;}
+  #ticker-wrap{display:none;}
+  #topbar-right{width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch;}
+  #topbar-right .hdr-stats{flex-shrink:0;}
+  #tabs{position:static;overflow-x:auto;-webkit-overflow-scrolling:touch;padding:0 6px;}
+  .tab-btn{padding:10px 12px;flex-shrink:0;}
+  #app{flex-direction:column;height:auto;overflow:visible;}
+  #sidebar{width:100%;min-width:0;height:260px;flex-shrink:0;border-right:none;border-bottom:1px solid var(--border);order:1;}
+  #stock-list{overflow-y:auto;-webkit-overflow-scrolling:touch;touch-action:pan-y;overscroll-behavior:contain;}
+  #right-panel{width:100%;min-width:0;border-left:none;border-bottom:1px solid var(--border);order:2;overflow:visible;}
+  #order-panel{max-height:none;overflow:visible;}
+  #main{order:3;overflow:visible;padding:12px;}
+  .stat-grid{grid-template-columns:repeat(2,1fr);}
+  .asset-summary{grid-template-columns:1fr;}
+  .asset-card.main-card{flex-wrap:wrap;gap:14px;}
+  .asset-divider{display:none;}
+  .portfolio-section{grid-template-columns:1fr;}
+}
 </style>
 </head>
 <body>
@@ -837,18 +858,6 @@ window._fbLoadRanking = async () => {
 window._fbSaveHistory = async (historyData) => {
   await setDoc(doc(db, 'market', 'history'), historyData);
 };
-
-// 쿠폰 조회
-window._fbGetCoupon = async (code) => {
-  const snap = await getDoc(doc(db, 'coupons', code));
-  return snap.exists() ? snap.data() : null;
-};
-// 쿠폰 사용 처리 (usedBy 배열에 uid 추가)
-window._fbUseCoupon = async (code, uid, coupon) => {
-  const used = coupon.usedBy || [];
-  used.push(uid);
-  await setDoc(doc(db, 'coupons', code), { ...coupon, usedBy: used });
-};
 // history 불러오기 (일반 유저 접속 시)
 window._fbLoadHistory = async () => {
   const snap = await getDoc(doc(db, 'market', 'history'));
@@ -873,6 +882,12 @@ window._fbSubscribeNews = (callback) => {
 };
 
 // 마스터 등록 시도 — 없으면 내가 마스터
+// 마스터 강제 등록 (어드민 전용)
+window._fbSetMaster = async (uid) => {
+  await set(masterRef, { uid, ts: Date.now() });
+  onDisconnect(masterRef).remove();
+};
+
 window._fbTryBecomeMaster = async (uid) => {
   const snap = await get(masterRef);
   if (!snap.exists()) {
@@ -1007,6 +1022,13 @@ setTimeout(() => {
     <div class="login-ok"  id="login-ok"></div>
     <div id="fb-status" style="font-family:var(--mono);font-size:9px;color:var(--muted);text-align:center;margin-top:6px;">Firebase 연결 중…</div>
 
+    <button onclick="startAsGuest()" id="guest-btn" style="
+      width:100%;margin-top:12px;padding:10px;
+      background:rgba(0,200,255,.08);border:1px solid rgba(0,200,255,.3);
+      border-radius:5px;color:var(--accent);font-family:var(--mono);
+      font-size:12px;cursor:pointer;letter-spacing:.5px;
+    ">👻 게스트로 시작 (저장·랭킹 없음)</button>
+
     <button onclick="hideLoginScreen()" style="
       width:100%;margin-top:10px;padding:9px;
       background:transparent;border:1px solid var(--border2);
@@ -1043,18 +1065,21 @@ setTimeout(() => {
 <!-- 설정 모달 -->
 <div id="settings-modal">
   <div class="settings-box">
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
-      <h3 style="margin:0;">⚙ 설정</h3>
-      <button onclick="closeSettings()" style="background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer;line-height:1;">✕</button>
+    <!-- 고정 헤더 -->
+    <div style="padding:20px 24px 0;flex-shrink:0;">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
+        <h3 style="margin:0;padding:0;">⚙ 설정</h3>
+        <button onclick="closeSettings()" style="background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer;line-height:1;">✕</button>
+      </div>
+      <!-- 탭 3개 -->
+      <div class="stab-row">
+        <div class="stab active" id="stab-audio"   onclick="setSettingsTab('audio')">🔊 오디오</div>
+        <div class="stab"        id="stab-save"    onclick="setSettingsTab('save')">💾 저장</div>
+        <div class="stab"        id="stab-account" onclick="setSettingsTab('account')">👤 계정</div>
+      </div>
     </div>
-
-    <!-- 탭 3개 -->
-    <div class="stab-row">
-      <div class="stab active" id="stab-audio"   onclick="setSettingsTab('audio')">🔊 오디오</div>
-      <div class="stab"        id="stab-save"    onclick="setSettingsTab('save')">💾 저장</div>
-      <div class="stab"        id="stab-account" onclick="setSettingsTab('account')">👤 계정</div>
-      <div class="stab"        id="stab-coupon"  onclick="setSettingsTab('coupon')">🎟 쿠폰</div>
-    </div>
+    <!-- 스크롤 영역 -->
+    <div style="overflow-y:auto;flex:1;padding:16px 24px 24px;scrollbar-width:thin;scrollbar-color:rgba(255,255,255,0.1) transparent;">
 
     <!-- 오디오 탭 -->
     <div id="spanel-audio">
@@ -1139,77 +1164,7 @@ setTimeout(() => {
       </div>
     </div>
 
-    <!-- 쿠폰 탭 -->
-    <div id="spanel-coupon" style="display:none;">
-      <!-- 쿠폰 입력 -->
-      <div style="background:var(--bg3);border:1px solid var(--border2);border-radius:8px;padding:18px;margin-bottom:10px;">
-        <div style="font-size:10px;color:var(--muted);letter-spacing:1.5px;text-transform:uppercase;margin-bottom:4px;">🎟 쿠폰 사용</div>
-        <div style="font-size:11px;color:var(--muted);margin-bottom:14px;">쿠폰 코드를 입력하면 치트가 활성화됩니다. 1회만 사용 가능합니다.</div>
-        <div class="login-field" style="margin-bottom:10px;">
-          <label style="font-family:var(--mono);font-size:10px;color:var(--muted);display:block;margin-bottom:4px;">쿠폰 코드</label>
-          <input class="login-input" id="coupon-input" type="text" placeholder="예: CHEAT2025" autocomplete="off" autocapitalize="characters"
-            onkeydown="if(event.key==='Enter')doUseCoupon()" style="text-transform:uppercase;letter-spacing:2px;">
-        </div>
-        <button onclick="doUseCoupon()" id="coupon-btn"
-          style="width:100%;padding:10px;background:linear-gradient(135deg,#7c3aed,#9c6bff);border:none;border-radius:5px;color:#fff;font-family:var(--sans);font-weight:700;font-size:12px;cursor:pointer;transition:opacity .15s;letter-spacing:.5px;">
-          🎁 쿠폰 사용하기
-        </button>
-        <div id="coupon-msg" style="font-family:var(--mono);font-size:11px;text-align:center;margin-top:10px;min-height:16px;"></div>
-      </div>
-
-      <!-- 치트 패널 (쿠폰 사용 후 표시) -->
-      <div id="cheat-panel" style="display:none;">
-        <div style="font-size:10px;color:var(--purple);letter-spacing:2px;text-transform:uppercase;margin-bottom:10px;display:flex;align-items:center;gap:6px;">
-          <span style="animation:pulse 1.5s infinite">⚡</span> CHEAT MODE ACTIVE
-        </div>
-
-        <!-- 돈 조작 -->
-        <div style="background:var(--bg3);border:1px solid rgba(156,107,255,.3);border-radius:8px;padding:14px;margin-bottom:10px;">
-          <div style="font-size:10px;color:var(--purple);letter-spacing:1px;margin-bottom:10px;">💰 현금 조작</div>
-          <div style="display:flex;gap:6px;margin-bottom:8px;">
-            <input id="cheat-cash-amount" type="number" placeholder="금액 (예: 10000000)"
-              style="flex:1;background:var(--bg4);border:1px solid rgba(156,107,255,.3);border-radius:4px;color:var(--text);font-family:var(--mono);font-size:12px;padding:7px 10px;outline:none;">
-          </div>
-          <div style="display:flex;gap:6px;">
-            <button onclick="cheatAddCash(1)"
-              style="flex:1;padding:8px;background:rgba(255,61,90,.12);border:1px solid rgba(255,61,90,.3);border-radius:4px;color:var(--red);font-family:var(--mono);font-size:11px;cursor:pointer;font-weight:700;">
-              + 추가
-            </button>
-            <button onclick="cheatAddCash(-1)"
-              style="flex:1;padding:8px;background:rgba(33,150,243,.12);border:1px solid rgba(33,150,243,.3);border-radius:4px;color:var(--green);font-family:var(--mono);font-size:11px;cursor:pointer;font-weight:700;">
-              − 차감
-            </button>
-          </div>
-          <div id="cheat-cash-msg" style="font-family:var(--mono);font-size:10px;color:var(--muted);margin-top:6px;min-height:14px;"></div>
-        </div>
-
-        <!-- 주가 조작 -->
-        <div style="background:var(--bg3);border:1px solid rgba(156,107,255,.3);border-radius:8px;padding:14px;">
-          <div style="font-size:10px;color:var(--purple);letter-spacing:1px;margin-bottom:10px;">📈 주가 조작</div>
-          <div style="display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap;">
-            <select id="cheat-stock-sel"
-              style="flex:1;min-width:120px;background:var(--bg4);border:1px solid rgba(156,107,255,.3);border-radius:4px;color:var(--text);font-family:var(--mono);font-size:11px;padding:7px 8px;outline:none;">
-            </select>
-            <input id="cheat-price-pct" type="number" placeholder="% (예: 50 또는 -30)"
-              style="width:110px;background:var(--bg4);border:1px solid rgba(156,107,255,.3);border-radius:4px;color:var(--text);font-family:var(--mono);font-size:12px;padding:7px 10px;outline:none;">
-          </div>
-          <div style="display:flex;gap:6px;margin-bottom:8px;">
-            <button onclick="cheatSetPrice()"
-              style="flex:1;padding:8px;background:rgba(156,107,255,.15);border:1px solid rgba(156,107,255,.4);border-radius:4px;color:var(--purple);font-family:var(--mono);font-size:11px;cursor:pointer;font-weight:700;">
-              ⚡ 주가 변경 (%)
-            </button>
-          </div>
-          <div style="display:flex;gap:4px;flex-wrap:wrap;">
-            <button onclick="cheatPriceQuick(10)"  style="flex:1;padding:5px 4px;background:rgba(255,61,90,.1);border:1px solid rgba(255,61,90,.25);border-radius:3px;color:var(--red);font-family:var(--mono);font-size:10px;cursor:pointer;">+10%</button>
-            <button onclick="cheatPriceQuick(30)"  style="flex:1;padding:5px 4px;background:rgba(255,61,90,.1);border:1px solid rgba(255,61,90,.25);border-radius:3px;color:var(--red);font-family:var(--mono);font-size:10px;cursor:pointer;">+30%</button>
-            <button onclick="cheatPriceQuick(100)" style="flex:1;padding:5px 4px;background:rgba(255,61,90,.1);border:1px solid rgba(255,61,90,.25);border-radius:3px;color:var(--red);font-family:var(--mono);font-size:10px;cursor:pointer;">+100%</button>
-            <button onclick="cheatPriceQuick(-30)" style="flex:1;padding:5px 4px;background:rgba(33,150,243,.1);border:1px solid rgba(33,150,243,.25);border-radius:3px;color:var(--green);font-family:var(--mono);font-size:10px;cursor:pointer;">-30%</button>
-            <button onclick="cheatPriceQuick(-50)" style="flex:1;padding:5px 4px;background:rgba(33,150,243,.1);border:1px solid rgba(33,150,243,.25);border-radius:3px;color:var(--green);font-family:var(--mono);font-size:10px;cursor:pointer;">-50%</button>
-          </div>
-          <div id="cheat-price-msg" style="font-family:var(--mono);font-size:10px;color:var(--muted);margin-top:6px;min-height:14px;"></div>
-        </div>
-      </div>
-    </div>
+    <!-- 홈으로 나가기 -->
     <div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--border);">
       <button onclick="goHome()" style="width:100%;padding:10px;background:transparent;border:1px solid var(--border2);border-radius:5px;color:var(--muted);font-family:var(--mono);font-size:11px;cursor:pointer;transition:all .15s;letter-spacing:.5px;"
         onmouseover="this.style.borderColor='var(--accent2)';this.style.color='var(--text)'"
@@ -1217,6 +1172,7 @@ setTimeout(() => {
         ← 홈화면으로
       </button>
     </div>
+    </div><!-- /scroll-area -->
   </div>
 </div>
 <div id="topbar">
@@ -1387,18 +1343,10 @@ setTimeout(() => {
           <button class="btn-lev buy" onclick="doLevBuy()">매수</button>
           <button class="btn-lev sell" onclick="doLevSell()">매도</button>
         </div>
+        <div class="lev-positions" id="lev-positions"></div>
       </div>
     </div>
 
-    <!-- 보유종목 + 레버리지 포지션 통합 -->
-    <div id="holdings-panel">
-      <div class="op-title">보유 종목</div>
-      <div id="holdings-list"><div style="color:var(--muted);font-size:11px;padding:6px 0;">보유 중인 종목이 없습니다</div></div>
-      <div id="holdings-lev-section" style="display:none;">
-        <div class="op-title" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);">레버리지</div>
-        <div id="holdings-lev-list"></div>
-      </div>
-    </div>
   </div>
 </div>
 
@@ -1486,7 +1434,7 @@ let state = {
   watchlist: [],
   currentTicker: null,
   tradeTab: 'buy',
-  chartPeriod: 'all',
+  chartPeriod: 30,
   chartType: 'line',
   prevDayTotal: INIT_CASH, // 전날 총자산 (일일 손익 계산용)
 };
@@ -1499,7 +1447,7 @@ let tickTimer = null;
 let newsTimer = null;
 let currentTab = 'trade';
 let levState = { type: 'leverage', mult: 1 };
-let mainChartObj = null;
+// Chart.js 제거 — SVG 라인 차트로 교체
 
 // 일일 트렌드 — 매일 종목별 방향성 랜덤 설정
 let dailyTrend = {}; // { TRCR: +0.002, QTSC: -0.003, ... }
@@ -1517,12 +1465,19 @@ function initStocks() {
   globalRand = seededRand(getDateSeed());
   STOCK_DEF.forEach(def => {
     const startPrice = Math.round(def.base * (0.8 + globalRand() * 0.4));
+    // 시드 기반 365일치 과거 history 생성 (모든 유저 동일)
+    // Realtime DB에 저장된 데이터가 있으면 bootGame에서 교체됨
+    const histRand = seededRand((getDateSeed() + def.base) >>> 0);
+    histRand(); histRand();
+    const initHistory = genHistory(def.base, def.vol, 365, histRand);
+    // 마지막 값을 startPrice로 맞춰 차트 연속성 보장
+    initHistory[initHistory.length - 1] = startPrice;
     stocks[def.id] = {
       ...def,
       price: startPrice,
       openPrice: startPrice,
       prevClose: startPrice,
-      history: [],        // Realtime DB에서 복원 — 초기값으로 오염 방지
+      history: initHistory,
       intradayHist: [{ price: startPrice, label:'09:00' }],
       splitCount: 0,
     };
@@ -1571,16 +1526,12 @@ function getTickRand2(defIdx) {
   return r();
 }
 
-// BULL 방식 히스토리 생성 — 시드 기반
+// 히스토리 생성 — 시드 기반 균등분포
 function genHistory(base, vol, days, rand) {
   const r = rand || globalRand;
   let arr = [], price = base * (0.8 + r() * 0.4);
   for (let i = 0; i < days; i++) {
-    // 정규분포 근사 (Box-Muller) + 클리핑으로 급등락 억제
-    const u1 = Math.max(r(), 1e-10), u2 = r();
-    const gauss = Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
-    const rawD = gauss * vol * 0.4;
-    const d = Math.max(-vol * 0.9, Math.min(vol * 0.9, rawD));
+    const d = (r() - 0.5) * vol;
     price = Math.max(Math.round(price * (1 + d)), Math.round(base * 0.3));
     arr.push(price);
   }
@@ -1633,27 +1584,17 @@ function tickPrices() {
     STOCK_DEF.forEach((def, defIdx) => {
       const s = stocks[def.id];
 
-      // ── 스무딩: Box-Muller 기반 정규분포로 급등락 억제 ──
-      const u1 = getTickRand(defIdx);
-      const u2 = getTickRand2(defIdx);
-      const gauss = Math.sqrt(-2 * Math.log(Math.max(u1, 1e-10))) * Math.cos(2 * Math.PI * u2);
-      // 1-sigma = vol*0.35 (원래보다 완화), 최대 ±2.2sigma 클리핑
-      const rawD = gauss * def.vol * 0.35;
-      const d = Math.max(-def.vol * 0.77, Math.min(def.vol * 0.77, rawD));
-
-      const trend = dailyTrend[def.id] || 0; // 오늘의 트렌드
-      // 뉴스 영향은 20틱에 분산 (한 번에 30% → 5%씩 분산)
+      const d = (getTickRand(defIdx) - 0.5) * def.vol;
+      const trend = dailyTrend[def.id] || 0;
+      // 뉴스 영향은 20틱에 분산
       let imp = pendingImpacts[def.id] || 0;
       if (imp) {
-        const chunk = imp * 0.05; // 5%씩 분산
+        const chunk = imp * 0.05;
         pendingImpacts[def.id] = imp - chunk;
         if (Math.abs(pendingImpacts[def.id]) < 0.001) delete pendingImpacts[def.id];
         imp = chunk;
       }
-      // 단일 틱 최대 변동 제한: ±vol*1.5
-      const rawChange = d + trend + imp;
-      const maxTick = def.vol * 1.5;
-      const change = Math.max(-maxTick, Math.min(maxTick, rawChange));
+      const change = d + trend + imp;
       let newPrice = Math.max(Math.round(s.price * (1 + change)), Math.round(def.base * 0.2));
 
       // 등급별 분할 기준
@@ -1720,36 +1661,24 @@ function tickPrices() {
     if (window._fbPushPrices) {
       const payload = { prices: priceMap, gameDay, tickCount, splits: splitMap || {} };
       // 매 틱: intradayHist 포함 (재접속 시 즉시 복원용)
+      // 30틱마다: history 전체도 포함 (1Y 차트 동기화)
       const intradayData = {};
       STOCK_DEF.forEach(def => {
         intradayData[def.id] = stocks[def.id].intradayHist.slice(-500);
       });
       payload.intradayHists = intradayData;
+      if (tickCount % 30 === 0) {
+        const histData = {};
+        STOCK_DEF.forEach(def => {
+          histData[def.id] = stocks[def.id].history.slice(-500);
+        });
+        payload.histories = histData;
+      }
       window._fbPushPrices(payload).catch(()=>{});
     }
   }
-  // 강제청산: 레버리지 손실 -100% 도달 시 즉시 포지션 제거
-  checkLevLiquidation();
   // 일반 유저는 _fbSubscribePrices 콜백으로 수신
   refreshUI();
-}
-
-// ═══════════════════════════════════════════════
-// 강제청산 체크
-// ═══════════════════════════════════════════════
-function checkLevLiquidation() {
-  Object.keys(state.levHoldings || {}).forEach(key => {
-    const pos = state.levHoldings[key];
-    const cur = latestPrice(pos.stockId);
-    const pct = (cur - pos.avgCost) / pos.avgCost;
-    const dir = pos.type === 'inverse' ? -1 : 1;
-    const pnlRate = dir * pct * pos.mult;
-    if (pnlRate <= -1) {
-      // 원금 전액 손실 — 포지션 즉시 제거 (현금 환급 없음)
-      delete state.levHoldings[key];
-      showToast('err', `💥 ${pos.name} ${pos.type === 'inverse' ? '인버스' : '레버리지'} ×${pos.mult} 강제청산`);
-    }
-  });
 }
 
 // ═══════════════════════════════════════════════
@@ -1766,6 +1695,8 @@ function refreshUI() {
   if (currentTab === 'watchlist') renderWatchlist();
   renderHoldings();
   updateOrderPanel();
+  updateLevInfo();
+  renderLevPositions();
   renderTickerBar();
 }
 
@@ -1804,19 +1735,20 @@ function getRisk(vol) {
 // 등급별 분할 기준가
 function getSplitThreshold(vol) {
   const g = getRisk(vol).g;
-  if (g === 'S') return 2000000; // S: 200만
-  if (g === 'A') return 1000000; // A: 100만
-  if (g === 'B') return 500000;  // B: 50만
-  return 500000;                  // C: 50만
+  // base 대비 약 3~5배 수준으로 조정 → 수십 일 플레이 시 발생 가능
+  if (g === 'S') return 400000;  // S(코인 ~12만): 40만 초과 시 분할
+  if (g === 'A') return 150000;  // A(~3~9만): 15만 초과 시 분할
+  if (g === 'B') return 100000;  // B(~2~4만): 10만 초과 시 분할
+  return 80000;                   // C(~1~3만): 8만 초과 시 분할
 }
 
-// 등급별 상장폐지 기준가
+// 등급별 상장폐지 기준가 — base 대비 1/4~1/5 수준
 function getDelistThreshold(vol) {
   const g = getRisk(vol).g;
-  if (g === 'S') return 100;   // S: 100원
-  if (g === 'A') return 500;   // A: 500원
-  if (g === 'B') return 1000;  // B: 1000원
-  return 2000;                  // C: 2000원
+  if (g === 'S') return 20000;  // S(코인 ~12만): 2만 이하 상폐
+  if (g === 'A') return 8000;   // A(~3~9만): 8000원 이하 상폐
+  if (g === 'B') return 5000;   // B(~2~4만): 5000원 이하 상폐
+  return 3000;                   // C(~1~3만): 3000원 이하 상폐
 }
 
 // ═══════════════════════════════════════════════
@@ -1892,20 +1824,14 @@ function sparklineSVG(vals, openPrice, W, H) {
 function selectStock(id) {
   state.currentTicker = id;
   renderSidebar();
-  // 어느 탭에서든 매매탭으로 이동
-  if (currentTab !== 'trade') {
-    switchTab('trade', null);
-  } else {
-    renderDetail(id);
-  }
+  if (currentTab === 'trade') renderDetail(id);
   updateOrderPanel();
 }
 
 function renderDetail(id) {
   const s = stocks[id];
   if (!s) return;
-  // canvas가 교체되기 전에 Chart.js 인스턴스를 반드시 해제
-  if (mainChartObj) { mainChartObj.destroy(); mainChartObj = null; }
+
   const chg = (s.price - s.openPrice) / s.openPrice;
   const chgClass = chg >= 0 ? 'chg-up' : 'chg-dn';
   const risk = getRisk(s.vol);
@@ -1930,10 +1856,12 @@ function renderDetail(id) {
 
     <div class="chart-controls">
       <div class="period-row">
-        <button class="per-btn ${state.chartPeriod==='all'?'active':''}" onclick="setPeriod('all',this)">전체</button>
-        <button class="per-btn ${state.chartPeriod===180?'active':''}" onclick="setPeriod(180,this)">3H</button>
-        <button class="per-btn ${state.chartPeriod===60?'active':''}" onclick="setPeriod(60,this)">1H</button>
-        <button class="per-btn ${state.chartPeriod===30?'active':''}" onclick="setPeriod(30,this)">30M</button>
+        <button class="per-btn ${state.chartPeriod===1?'active':''}" onclick="setPeriod(1,this)">1D</button>
+        <button class="per-btn ${state.chartPeriod===7?'active':''}" onclick="setPeriod(7,this)">1W</button>
+        <button class="per-btn ${state.chartPeriod===30?'active':''}" onclick="setPeriod(30,this)">1M</button>
+        <button class="per-btn ${state.chartPeriod===90?'active':''}" onclick="setPeriod(90,this)">3M</button>
+        <button class="per-btn ${state.chartPeriod===180?'active':''}" onclick="setPeriod(180,this)">6M</button>
+        <button class="per-btn ${state.chartPeriod===365?'active':''}" onclick="setPeriod(365,this)">1Y</button>
       </div>
       <div class="chart-type-toggle">
         <button class="ct-btn ${state.chartType==='line'?'active':''}" onclick="setChartType('line',this)">📈 라인</button>
@@ -1941,7 +1869,7 @@ function renderDetail(id) {
       </div>
     </div>
 
-    <div id="chart-wrap"><canvas id="main-chart"></canvas></div>
+    <div id="chart-wrap"></div>
 
     <div class="stat-grid">
       <div class="stat-card"><div class="sl">시가</div><div class="sv">${fmtN(s.openPrice)}</div></div>
@@ -1971,301 +1899,266 @@ function updateDetailPrices() {
     el2.textContent = `${fmtPct(chg)} (${sign(s.price-s.openPrice)}${fmtN(s.price - s.openPrice)}원)`;
     el2.className = `dh-chg ${chg>=0?'chg-up':'chg-dn'}`;
   }
-  // mainChartObj 없으면 전체 재렌더 (최초 접속 또는 DOM 교체 후)
-  if (!mainChartObj) { renderMainChart(); return; }
-
-  // update chart in-place (line only)
-  if (state.chartType === 'line' && mainChartObj) {
-    const slice = getChartSlice();
-    const prices = slice.map(h => h.price);
-    const isUp = s.price >= s.openPrice;
-
-    const step = Math.ceil(slice.length / 6);
-    const labels = slice.map((h, i) => i % step === 0 ? (h.label || '') : '');
-
-    mainChartObj.data.labels = labels;
-    mainChartObj.data.datasets[0].data = prices;
-    mainChartObj.data.datasets[0].borderColor = isUp ? '#ff3d5a' : '#2196f3';
-    mainChartObj.data.datasets[0].backgroundColor = isUp ? 'rgba(255,61,90,0.07)' : 'rgba(33,150,243,0.07)';
-
-    // 평단가/레버리지 데이터셋 재계산
-    const avg = state.avgCost[state.currentTicker] || 0;
-    const hasAvg = state.holdings[state.currentTicker] > 0 && avg > 0;
-    const levAvgs = Object.values(state.levHoldings || {})
-      .filter(pos => pos.stockId === state.currentTicker);
-    let dsIdx = 1;
-    if (hasAvg && mainChartObj.data.datasets[dsIdx]) {
-      mainChartObj.data.datasets[dsIdx].data = prices.map(() => avg);
-      dsIdx++;
-    }
-    levAvgs.forEach(pos => {
-      if (mainChartObj.data.datasets[dsIdx]) {
-        mainChartObj.data.datasets[dsIdx].data = prices.map(() => pos.avgCost);
-        dsIdx++;
-      }
-    });
-    mainChartObj.update('none');
-  } else if (state.chartType === 'candle') {
-    renderMainChart();
-  }
+  renderMainChart();
 }
 
-function getChartSlice() {
+// ── 차트 데이터 반환: { prices, labels }
+function getChartData() {
   const s = stocks[state.currentTicker];
-  const hist = s.intradayHist;
-  if (state.chartPeriod === 'all' || !hist.length) return hist;
+  if (!s) return { prices: [], labels: [] };
 
-  // 현재 마지막 레이블 시각 기준으로 N분 전 이후만 반환
-  const lastLabel = hist[hist.length - 1]?.label || '09:00';
-  const toMins = label => {
-    const [h, m] = label.split(':').map(Number);
-    return h * 60 + m;
-  };
-  const nowMins = toMins(lastLabel);
-  const fromMins = nowMins - state.chartPeriod;
-  const result = hist.filter(h => toMins(h.label) >= fromMins);
-  return result.length > 1 ? result : hist;
+  if (state.chartPeriod === 1) {
+    // 1D: intradayHist 그대로
+    return {
+      prices: s.intradayHist.map(h => h.price),
+      labels: s.intradayHist.map(h => h.label),
+    };
+  }
+
+  // 1W~1Y: history(과거 종가) + 오늘 intradayHist
+  // intradayHist를 마지막에 붙여야 수직선 없이 자연스럽게 이어짐
+  const hist = s.history.slice(-state.chartPeriod);
+  const todayPrices = s.intradayHist.map(h => h.price);
+
+  // hist가 없으면 오늘 1D 데이터만
+  if (hist.length === 0) {
+    return {
+      prices: todayPrices,
+      labels: s.intradayHist.map(h => h.label),
+    };
+  }
+
+  // history = [...과거종가들, 오늘openPrice]
+  // nextDay에서 오늘openPrice를 history에 push하므로
+  // history.slice(-period, -1) = 과거 종가들 (오늘 제외)
+  // + intradayHist = 오늘 장중 데이터
+  const pastHist = hist.slice(0, -1); // 오늘 openPrice 제거
+
+  // pastHist가 비어있으면 intradayHist만 반환
+  if (pastHist.length === 0) {
+    return {
+      prices: todayPrices,
+      labels: s.intradayHist.map(h => h.label),
+    };
+  }
+
+  const prices = [...pastHist, ...todayPrices];
+  const labels = [
+    ...pastHist.map((_, i) => {
+      const daysAgo = pastHist.length - i;
+      return `D-${daysAgo}`;
+    }),
+    ...s.intradayHist.map(h => h.label),
+  ];
+  return { prices, labels };
 }
 
 // ═══════════════════════════════════════════════
-// CHART — BULL 방식 (라인: Chart.js, 캔들: Canvas2D)
+// CHART — SVG 라인 + Canvas2D 캔들
 // ═══════════════════════════════════════════════
 function renderMainChart() {
   if (!state.currentTicker) return;
-  if (mainChartObj) { mainChartObj.destroy(); mainChartObj = null; }
-
-  const canvas = document.getElementById('main-chart');
-  if (!canvas) return;
-  const slice = getChartSlice();
+  const wrap = document.getElementById('chart-wrap');
+  if (!wrap) return;
   const s = stocks[state.currentTicker];
-  const isUp = s.price >= s.openPrice; // openPrice 기준으로 색상 결정
+  const { prices, labels } = getChartData();
+  if (!prices.length) return;
+
+  const isUp = s.price >= s.openPrice;
 
   if (state.chartType === 'line') {
-    const lineC = isUp ? '#ff3d5a' : '#2196f3';
-    const fillC = isUp ? 'rgba(255,61,90,0.07)' : 'rgba(33,150,243,0.07)';
-    const prices = slice.map(h => h.price);
-    const step = Math.ceil(slice.length / 6);
-    const labels = slice.map((h, i) => i % step === 0 ? (h.label || '') : '');
-    canvas.style.width = '100%';
-    canvas.style.height = '180px';
-    const ctx = canvas.getContext('2d');
-    const avgCost = state.avgCost[state.currentTicker] || 0;
-    const hasAvg = state.holdings[state.currentTicker] > 0 && avgCost > 0;
-
-    // 레버리지 포지션 평단가 수집
-    const levAvgs = Object.values(state.levHoldings || {})
-      .filter(pos => pos.stockId === state.currentTicker)
-      .map(pos => ({
-        avg: pos.avgCost,
-        color: pos.type === 'inverse' ? 'rgba(33,150,243,0.8)' : 'rgba(255,160,0,0.8)',
-        label: `${pos.type === 'inverse' ? '인버스' : '레버리지'} ×${pos.mult} 평단가`,
-      }));
-
-    mainChartObj = new Chart(ctx, {
-      type: 'line',
-      data: {
-        labels,
-        datasets: [
-          {
-            data: prices,
-            borderColor: lineC,
-            backgroundColor: fillC,
-            borderWidth: 2,
-            fill: true,
-            pointRadius: 0,
-            pointHoverRadius: 4,
-            tension: 0.3,
-          },
-          // 일반 평단가 가로선
-          ...(hasAvg ? [{
-            data: prices.map(() => avgCost),
-            borderColor: 'rgba(255,214,0,0.7)',
-            backgroundColor: 'transparent',
-            borderWidth: 1.5,
-            borderDash: [5, 4],
-            pointRadius: 0,
-            fill: false,
-            tension: 0,
-            label: '평단가',
-          }] : []),
-          // 레버리지 평단가 가로선들
-          ...levAvgs.map(lev => ({
-            data: prices.map(() => lev.avg),
-            borderColor: lev.color,
-            backgroundColor: 'transparent',
-            borderWidth: 1.5,
-            borderDash: [3, 3],
-            pointRadius: 0,
-            fill: false,
-            tension: 0,
-            label: lev.label,
-          })),
-        ]
-      },
-      options: {
-        responsive: true, maintainAspectRatio: false,
-        plugins: {
-          legend: { display: false },
-          tooltip: {
-            backgroundColor: '#111820',
-            borderColor: 'rgba(0,200,255,0.15)',
-            borderWidth: 1,
-            callbacks: {
-              label: ctx => {
-                if (ctx.datasetIndex === 0) return fmt(ctx.raw);
-                return `${ctx.dataset.label}: ${fmt(ctx.raw)}`;
-              }
-            }
-          }
-        },
-        scales: {
-          x: { grid: { color: 'rgba(255,255,255,0.03)' }, ticks: { color: '#4a6080', font: { size:10, family:'Space Mono' } } },
-          y: { grid: { color: 'rgba(255,255,255,0.03)' }, ticks: { color: '#4a6080', font: { size:10, family:'Space Mono' }, callback: v => v>=10000?(v/10000).toFixed(0)+'만':fmtN(v) } }
-        }
-      }
-    });
+    _renderLineChart(wrap, s, prices, labels, isUp);
   } else {
-    // 캔들 차트 (Canvas2D) — 상승=빨강, 하락=초록
-    const W = canvas.parentElement.clientWidth || 560;
-    const H = 190;
-    canvas.width = W; canvas.height = H;
-    canvas.style.width = W+'px'; canvas.style.height = H+'px';
-
-    const PAD_L=52, PAD_R=12, PAD_T=14, PAD_B=30;
-    const cW = W - PAD_L - PAD_R;
-    const cH = H - PAD_T - PAD_B;
-
-    // 캔들 수 결정: 화면에 딱 맞게 그룹핑
-    const prices = slice.map(h => h.price);
-    const maxCandles = Math.floor(cW / 8);
-    const grp = Math.max(1, Math.ceil(prices.length / maxCandles));
-    const candles = [];
-    for (let i = 0; i < prices.length; i += grp) {
-      const chunk = prices.slice(i, Math.min(i + grp, prices.length));
-      if (!chunk.length) continue;
-      // grp=1이면 이전 캔들 종가를 시가로 사용해 doji 방지
-      const open = (grp === 1 && i > 0) ? prices[i-1] : chunk[0];
-      const close = chunk[chunk.length - 1];
-      candles.push({
-        o: open,
-        h: Math.max(open, ...chunk),
-        l: Math.min(open, ...chunk),
-        c: close,
-        idx: i
-      });
-    }
-    if (!candles.length) return;
-
-    const ctx = canvas.getContext('2d');
-    ctx.clearRect(0, 0, W, H);
-
-    const yMax = Math.max(...candles.map(c => c.h));
-    const yMin = Math.min(...candles.map(c => c.l));
-    const yPad = (yMax - yMin) * 0.05 || 1;
-    const yTop = yMax + yPad, yBot = yMin - yPad;
-    const yRng = yTop - yBot;
-    const toY = v => PAD_T + cH - ((v - yBot) / yRng) * cH;
-    const cw = Math.max(3, Math.floor((cW / candles.length) * 0.65));
-
-    // 그리드
-    ctx.strokeStyle = 'rgba(255,255,255,0.04)'; ctx.lineWidth = 1;
-    for (let g = 0; g <= 4; g++) {
-      const y = PAD_T + (cH / 4) * g;
-      ctx.beginPath(); ctx.moveTo(PAD_L, y); ctx.lineTo(W - PAD_R, y); ctx.stroke();
-      const val = yTop - (yRng / 4) * g;
-      ctx.fillStyle = '#4a6080'; ctx.font = '9px Space Mono,monospace'; ctx.textAlign = 'right';
-      ctx.fillText(val >= 10000 ? (val/10000).toFixed(1)+'만' : fmtN(Math.round(val)), PAD_L - 4, y + 3);
-    }
-
-    const xStep = Math.max(1, Math.ceil(candles.length / 5));
-    const slotW = cW / candles.length;
-
-    candles.forEach((c, i) => {
-      const x = PAD_L + (i + 0.5) * slotW;
-      const bull = c.c >= c.o;
-      const bodyC = bull ? '#ff3d5a' : '#2196f3';
-      const wickC = bull ? 'rgba(255,61,90,0.7)' : 'rgba(33,150,243,0.7)';
-
-      const yH = toY(c.h), yL = toY(c.l);
-      const yO = toY(c.o), yC = toY(c.c);
-      const bTop = Math.min(yO, yC);
-      const bBot = Math.max(yO, yC);
-      const bH = Math.max(2, bBot - bTop); // 최소 2px 보장
-
-      // 윅
-      ctx.strokeStyle = wickC; ctx.lineWidth = 1;
-      ctx.beginPath(); ctx.moveTo(x, yH); ctx.lineTo(x, bTop); ctx.stroke();
-      ctx.beginPath(); ctx.moveTo(x, bBot); ctx.lineTo(x, yL); ctx.stroke();
-
-      // 몸통
-      ctx.fillStyle = bodyC;
-      ctx.fillRect(x - cw / 2, bTop, cw, bH);
-
-      // X축 레이블
-      if (i % xStep === 0) {
-        ctx.fillStyle = '#4a6080'; ctx.font = '9px Space Mono,monospace'; ctx.textAlign = 'center';
-        const label = slice[c.idx]?.label || '';
-        ctx.fillText(label, x, H - 6);
-      }
-    });
-
-    // 툴팁
-    canvas._candles = candles;
-    canvas._slotW = slotW;
-    canvas._PAD_L = PAD_L;
-    canvas.onmousemove = e => {
-      const rect = canvas.getBoundingClientRect();
-      const mx = e.clientX - rect.left;
-      const idx = Math.floor((mx - PAD_L) / slotW);
-      if (idx < 0 || idx >= candles.length) { canvas._tip?.remove(); canvas._tip = null; return; }
-      const c = candles[idx];
-      if (!canvas._tip) {
-        canvas._tip = document.createElement('div');
-        canvas._tip.style.cssText = 'position:absolute;background:#111820;border:1px solid rgba(0,200,255,.15);border-radius:4px;padding:7px 10px;font:10px Space Mono,monospace;color:#c8d8ec;pointer-events:none;z-index:200;line-height:1.8;';
-        canvas.parentElement.style.position = 'relative';
-        canvas.parentElement.appendChild(canvas._tip);
-      }
-      const tipX = mx > W * 0.6 ? mx - 130 : mx + 10;
-      canvas._tip.style.left = tipX + 'px'; canvas._tip.style.top = '10px';
-      canvas._tip.innerHTML = `시: ${fmtN(c.o)}<br>고: <span style="color:#ff3d5a">${fmtN(c.h)}</span><br>저: <span style="color:#2196f3">${fmtN(c.l)}</span><br>종: ${fmtN(c.c)}`;
-    };
-    canvas.onmouseleave = () => { canvas._tip?.remove(); canvas._tip = null; };
-
-    // 평단가 수평선 (캔들 모드)
-    const avgCost = state.avgCost[state.currentTicker] || 0;
-    const hasAvg = state.holdings[state.currentTicker] > 0 && avgCost > 0;
-    if (hasAvg) {
-      const ay = toY(avgCost);
-      ctx.save();
-      ctx.strokeStyle = 'rgba(255,214,0,0.75)';
-      ctx.lineWidth = 1.5;
-      ctx.setLineDash([5, 4]);
-      ctx.beginPath(); ctx.moveTo(PAD_L, ay); ctx.lineTo(W - PAD_R, ay); ctx.stroke();
-      ctx.setLineDash([]);
-      ctx.fillStyle = 'rgba(255,214,0,0.85)';
-      ctx.font = '9px Space Mono,monospace'; ctx.textAlign = 'left';
-      ctx.fillText('평단 ' + fmtN(avgCost), PAD_L + 3, ay - 3);
-      ctx.restore();
-    }
-    // 레버리지 평단가 수평선
-    Object.values(state.levHoldings || {}).filter(pos => pos.stockId === state.currentTicker).forEach(pos => {
-      const ly = toY(pos.avgCost);
-      const lc = pos.type === 'inverse' ? 'rgba(77,159,255,0.75)' : 'rgba(255,160,0,0.75)';
-      const label = (pos.type === 'inverse' ? 'INV' : 'LEV') + '×' + pos.mult + ' ' + fmtN(pos.avgCost);
-      ctx.save();
-      ctx.strokeStyle = lc; ctx.lineWidth = 1.5;
-      ctx.setLineDash([3, 3]);
-      ctx.beginPath(); ctx.moveTo(PAD_L, ly); ctx.lineTo(W - PAD_R, ly); ctx.stroke();
-      ctx.setLineDash([]);
-      ctx.fillStyle = lc; ctx.font = '9px Space Mono,monospace'; ctx.textAlign = 'left';
-      ctx.fillText(label, PAD_L + 3, ly - 3);
-      ctx.restore();
-    });
+    _renderCandleChart(wrap, s, prices, labels);
   }
 }
 
-function setPeriod(period, btn) {
-  state.chartPeriod = period;
+function _renderLineChart(wrap, s, prices, labels, isUp) {
+  const W = wrap.clientWidth || 560;
+  const H = 196;
+  const PL = 52, PR = 12, PT = 14, PB = 28;
+  const cW = W - PL - PR, cH = H - PT - PB;
+
+  const mn = Math.min(...prices), mx = Math.max(...prices);
+  const pad = (mx - mn) * 0.1 || mn * 0.05 || 500;
+  const yBot = mn - pad, yTop = mx + pad, yRng = yTop - yBot;
+
+  const toX = i => PL + (prices.length < 2 ? cW/2 : (i / (prices.length - 1)) * cW);
+  const toY = v => PT + cH - ((v - yBot) / yRng) * cH;
+
+  const lineC = isUp ? '#ff3d5a' : '#2196f3';
+  const fillC = isUp ? 'rgba(255,61,90,0.08)' : 'rgba(33,150,243,0.08)';
+
+  // 그리드 + 축 레이블
+  let grid = '', yAxis = '', xAxis = '';
+  for (let g = 0; g <= 4; g++) {
+    const y = (PT + (cH / 4) * g).toFixed(1);
+    grid += `<line x1="${PL}" y1="${y}" x2="${W-PR}" y2="${y}" stroke="rgba(255,255,255,0.04)" stroke-width="1"/>`;
+    const val = yTop - (yRng / 4) * g;
+    const lbl = val >= 10000 ? (val/10000).toFixed(1)+'만' : fmtN(Math.round(val));
+    yAxis += `<text x="${PL-4}" y="${(parseFloat(y)+3).toFixed(1)}" text-anchor="end" fill="#4a6080" font-size="9" font-family="Space Mono,monospace">${lbl}</text>`;
+  }
+  const xStep = Math.max(1, Math.ceil(prices.length / 6));
+  for (let i = 0; i < prices.length; i += xStep) {
+    xAxis += `<text x="${toX(i).toFixed(1)}" y="${H-6}" text-anchor="middle" fill="#4a6080" font-size="9" font-family="Space Mono,monospace">${labels[i]||''}</text>`;
+  }
+
+  // 라인 + fill
+  const pts = prices.map((v,i) => `${toX(i).toFixed(1)},${toY(v).toFixed(1)}`).join(' ');
+  const fillPts = `${toX(0).toFixed(1)},${(PT+cH).toFixed(1)} ${pts} ${toX(prices.length-1).toFixed(1)},${(PT+cH).toFixed(1)}`;
+
+  // 평단가 선
+  let avgLines = '';
+  const avgCost = state.avgCost[state.currentTicker] || 0;
+  const hasAvg = (state.holdings[state.currentTicker] > 0) && avgCost > 0;
+  if (hasAvg) {
+    const ay = toY(avgCost).toFixed(1);
+    avgLines += `<line x1="${PL}" y1="${ay}" x2="${W-PR}" y2="${ay}" stroke="rgba(255,214,0,0.7)" stroke-width="1.5" stroke-dasharray="5,4"/>`;
+    avgLines += `<text x="${W-PR-2}" y="${(parseFloat(ay)-3).toFixed(1)}" text-anchor="end" fill="rgba(255,214,0,0.85)" font-size="9" font-family="Space Mono,monospace">평단 ${fmtN(avgCost)}</text>`;
+  }
+  Object.values(state.levHoldings || {}).filter(p => p.stockId === state.currentTicker).forEach(p => {
+    const lc = p.type === 'inverse' ? 'rgba(33,150,243,0.8)' : 'rgba(255,160,0,0.8)';
+    const ly = toY(p.avgCost).toFixed(1);
+    avgLines += `<line x1="${PL}" y1="${ly}" x2="${W-PR}" y2="${ly}" stroke="${lc}" stroke-width="1.5" stroke-dasharray="3,3"/>`;
+  });
+
+  // 마지막 점
+  const lx = toX(prices.length-1).toFixed(1), ly2 = toY(prices[prices.length-1]).toFixed(1);
+
+  wrap.innerHTML = `
+    <div style="position:relative;width:100%;height:${H}px;">
+      <svg id="mchart-svg" width="${W}" height="${H}" style="display:block;overflow:visible;">
+        ${grid}${yAxis}${xAxis}
+        <polygon points="${fillPts}" fill="${fillC}"/>
+        <polyline points="${pts}" fill="none" stroke="${lineC}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+        ${avgLines}
+        <circle cx="${lx}" cy="${ly2}" r="3" fill="${lineC}"/>
+        <line id="mchart-vline" x1="-999" y1="${PT}" x2="-999" y2="${PT+cH}" stroke="rgba(0,200,255,0.35)" stroke-width="1"/>
+        <circle id="mchart-dot" cx="-999" cy="-999" r="4" fill="${lineC}" stroke="var(--bg3)" stroke-width="1.5"/>
+        <rect x="${PL}" y="${PT}" width="${cW}" height="${cH}" fill="transparent" style="cursor:crosshair;" id="mchart-overlay"/>
+      </svg>
+      <div id="mchart-tip" style="display:none;position:absolute;top:10px;background:#111820;border:1px solid rgba(0,200,255,.18);border-radius:4px;padding:5px 9px;font:10px Space Mono,monospace;color:#c8d8ec;pointer-events:none;z-index:50;white-space:nowrap;"></div>
+    </div>`;
+
+  // 툴팁 이벤트
+  const overlay = document.getElementById('mchart-overlay');
+  const vline   = document.getElementById('mchart-vline');
+  const dot     = document.getElementById('mchart-dot');
+  const tip     = document.getElementById('mchart-tip');
+  const svg     = document.getElementById('mchart-svg');
+  if (!overlay) return;
+
+  overlay.addEventListener('mousemove', e => {
+    const rect = svg.getBoundingClientRect();
+    const mx = e.clientX - rect.left - PL;
+    const idx = Math.max(0, Math.min(prices.length-1, Math.round(mx / cW * (prices.length-1))));
+    const px = toX(idx).toFixed(1);
+    const py = toY(prices[idx]).toFixed(1);
+    vline.setAttribute('x1', px); vline.setAttribute('x2', px);
+    dot.setAttribute('cx', px);   dot.setAttribute('cy', py);
+    const tipW = 130;
+    tip.style.display = 'block';
+    tip.style.left = (parseFloat(px) > W * 0.65 ? parseFloat(px) - tipW - 8 : parseFloat(px) + 8) + 'px';
+    tip.textContent = `${labels[idx] || ''}  ${fmtN(prices[idx])}원`;
+  });
+  overlay.addEventListener('mouseleave', () => {
+    vline.setAttribute('x1', '-999'); vline.setAttribute('x2', '-999');
+    dot.setAttribute('cx', '-999');
+    tip.style.display = 'none';
+  });
+}
+
+function _renderCandleChart(wrap, s, prices, labels) {
+  // canvas 재사용 또는 생성
+  let canvas = wrap.querySelector('canvas');
+  if (!canvas) {
+    wrap.innerHTML = '<canvas id="main-chart"></canvas>';
+    canvas = wrap.querySelector('canvas');
+  }
+
+  const W = wrap.clientWidth || 560;
+  const H = 196;
+  canvas.width = W; canvas.height = H;
+  canvas.style.width = W+'px'; canvas.style.height = H+'px';
+
+  const PAD_L=52, PAD_R=12, PAD_T=14, PAD_B=28;
+  const cW = W-PAD_L-PAD_R, cH = H-PAD_T-PAD_B;
+
+  // 캔들 그룹핑
+  const maxCandles = Math.floor(cW / 8);
+  const grp = Math.max(1, Math.ceil(prices.length / maxCandles));
+  const candles = [];
+  for (let i = 0; i < prices.length; i += grp) {
+    const chunk = prices.slice(i, i + grp);
+    if (!chunk.length) continue;
+    const open = (grp === 1 && i > 0) ? prices[i-1] : chunk[0];
+    const close = chunk[chunk.length-1];
+    candles.push({ o: open, h: Math.max(open,...chunk), l: Math.min(open,...chunk), c: close, idx: i });
+  }
+  if (!candles.length) return;
+
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, W, H);
+
+  const yMax = Math.max(...candles.map(c=>c.h));
+  const yMin = Math.min(...candles.map(c=>c.l));
+  const yPad = (yMax-yMin)*0.05||1;
+  const yTop=yMax+yPad, yBot=yMin-yPad, yRng=yTop-yBot;
+  const toY = v => PAD_T + cH - ((v-yBot)/yRng)*cH;
+  const slotW = cW/candles.length;
+  const cw = Math.max(3, Math.floor(slotW*0.65));
+
+  // 그리드
+  ctx.strokeStyle='rgba(255,255,255,0.04)'; ctx.lineWidth=1;
+  for (let g=0;g<=4;g++) {
+    const y=PAD_T+(cH/4)*g;
+    ctx.beginPath(); ctx.moveTo(PAD_L,y); ctx.lineTo(W-PAD_R,y); ctx.stroke();
+    const val=yTop-(yRng/4)*g;
+    ctx.fillStyle='#4a6080'; ctx.font='9px Space Mono,monospace'; ctx.textAlign='right';
+    ctx.fillText(val>=10000?(val/10000).toFixed(1)+'만':fmtN(Math.round(val)), PAD_L-4, y+3);
+  }
+
+  const xStep = Math.max(1, Math.ceil(candles.length/5));
+  candles.forEach((c,i) => {
+    const x = PAD_L + (i+0.5)*slotW;
+    const bull = c.c >= c.o;
+    const bodyC = bull ? '#ff3d5a' : '#2196f3';
+    const wickC = bull ? 'rgba(255,61,90,0.7)' : 'rgba(33,150,243,0.7)';
+    const yH=toY(c.h), yL=toY(c.l), yO=toY(c.o), yC=toY(c.c);
+    const bTop=Math.min(yO,yC), bBot=Math.max(yO,yC), bH=Math.max(2,bBot-bTop);
+    ctx.strokeStyle=wickC; ctx.lineWidth=1;
+    ctx.beginPath(); ctx.moveTo(x,yH); ctx.lineTo(x,bTop); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x,bBot); ctx.lineTo(x,yL); ctx.stroke();
+    ctx.fillStyle=bodyC; ctx.fillRect(x-cw/2, bTop, cw, bH);
+    if (i%xStep===0) {
+      ctx.fillStyle='#4a6080'; ctx.font='9px Space Mono,monospace'; ctx.textAlign='center';
+      ctx.fillText(labels[c.idx]||'', x, H-6);
+    }
+  });
+
+  // 캔들 툴팁
+  canvas._candles=candles; canvas._slotW=slotW; canvas._PAD_L=PAD_L;
+  canvas.onmousemove = e => {
+    const rect=canvas.getBoundingClientRect();
+    const mx=e.clientX-rect.left;
+    const idx=Math.floor((mx-PAD_L)/slotW);
+    if (idx<0||idx>=candles.length) { canvas._tip?.remove(); canvas._tip=null; return; }
+    const c=candles[idx];
+    if (!canvas._tip) {
+      canvas._tip=document.createElement('div');
+      canvas._tip.style.cssText='position:absolute;background:#111820;border:1px solid rgba(0,200,255,.15);border-radius:4px;padding:7px 10px;font:10px Space Mono,monospace;color:#c8d8ec;pointer-events:none;z-index:200;line-height:1.8;';
+      canvas.parentElement.style.position='relative';
+      canvas.parentElement.appendChild(canvas._tip);
+    }
+    const tipX=mx>W*0.6?mx-130:mx+10;
+    canvas._tip.style.left=tipX+'px'; canvas._tip.style.top='10px';
+    canvas._tip.innerHTML=`시: ${fmtN(c.o)}<br>고: <span style="color:#ff3d5a">${fmtN(c.h)}</span><br>저: <span style="color:#2196f3">${fmtN(c.l)}</span><br>종: ${fmtN(c.c)}`;
+  };
+  canvas.onmouseleave=()=>{ canvas._tip?.remove(); canvas._tip=null; };
+}
+
+function setPeriod(days, btn) {
+  state.chartPeriod = days;
   document.querySelectorAll('.per-btn').forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
   renderMainChart();
@@ -2275,8 +2168,6 @@ function setChartType(type, btn) {
   state.chartType = type;
   document.querySelectorAll('.ct-btn').forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
-  const canvas = document.getElementById('main-chart');
-  if (canvas) { canvas._tip?.remove(); canvas._tip=null; canvas.onmousemove=null; canvas.onmouseleave=null; }
   renderMainChart();
 }
 
@@ -2455,7 +2346,7 @@ function setRpTab(tab) {
   document.getElementById('rpt-lev').classList.toggle('lev', true);
   document.getElementById('normal-trade').style.display = tab==='normal' ? 'block' : 'none';
   document.getElementById('lev-trade').style.display   = tab==='lev'    ? 'block' : 'none';
-  if (tab==='lev') { updateLevInfo(); }
+  if (tab==='lev') { updateLevInfo(); renderLevPositions(); }
 }
 function switchToLev()    { setRpTab('lev'); }
 function switchToNormal() { setRpTab('normal'); }
@@ -2478,7 +2369,7 @@ function doBuy() {
   sfxBuy();
   showToast('buy', `${stocks[state.currentTicker].name} ${fmtN(qty)}주 매수 완료`);
   renderHoldings(); updateOrderPanel();
-  if (state.chartType === 'line' && mainChartObj) renderMainChart(); // 평단가 선 즉시 반영
+  if (state.chartType === 'line') renderMainChart(); // 평단가 선 즉시 반영
   autoSave();
 }
 
@@ -2495,7 +2386,7 @@ function doSell() {
   sfxSell();
   showToast('sell', `${stocks[state.currentTicker].name} ${fmtN(qty)}주 매도 완료`);
   renderHoldings(); updateOrderPanel();
-  if (state.chartType === 'line' && mainChartObj) renderMainChart(); // 평단가 선 즉시 반영
+  if (state.chartType === 'line') renderMainChart(); // 평단가 선 즉시 반영
   autoSave();
 }
 
@@ -2546,10 +2437,10 @@ function doLevBuy() {
   h.qty += qty;
   addTx('buy', s.id, s.name, qty, s.price, cost, { lev:levState.mult, levType:levState.type });
   document.getElementById('cash-badge').textContent = fmt(state.cash);
-  renderHoldings(); updateLevInfo();
+  renderHoldings(); renderLevPositions(); updateLevInfo();
   sfxBuy();
   showToast('buy', `${s.name} ${levState.type==='inverse'?'인버스':'레버리지'} ×${levState.mult} ${fmtN(qty)}주 매수`);
-  if (state.chartType === 'line' && mainChartObj) renderMainChart();
+  if (state.chartType === 'line') renderMainChart();
   autoSave();
 }
 function doLevSell() {
@@ -2569,68 +2460,57 @@ function doLevSell() {
   const pnl = payout - h.avgCost*qty;
   addTx('sell', s.id, s.name, qty, s.price, payout, { lev:levState.mult, levType:levState.type });
   document.getElementById('cash-badge').textContent = fmt(state.cash);
-  renderHoldings(); updateLevInfo();
+  renderHoldings(); renderLevPositions(); updateLevInfo();
   sfxSell();
   showToast(pnl>=0?'buy':'sell', `${s.name} 레버리지 매도 ${pnl>=0?'+':''}${fmt(Math.round(pnl))}`);
-  if (state.chartType === 'line' && mainChartObj) renderMainChart();
+  if (state.chartType === 'line') renderMainChart();
   autoSave();
 }
+function renderLevPositions() {
+  const wrap = document.getElementById('lev-positions');
+  if (!wrap) return;
+  const keys = Object.keys(state.levHoldings||{});
+  if (!keys.length) { wrap.innerHTML='<div style="font-size:10px;color:var(--muted);padding:6px 0;">보유 레버리지 없음</div>'; return; }
+  wrap.innerHTML = keys.map(key => {
+    const pos = state.levHoldings[key];
+    const cur = latestPrice(pos.stockId);
+    const pct = (cur - pos.avgCost) / pos.avgCost;
+    const dir = pos.type==='inverse' ? -1 : 1;
+    const pnl = Math.round(pos.avgCost*pos.qty*dir*pct*pos.mult);
+    const isUp = pnl >= 0;
+    return `<div class="lev-pos-item">
+      <span class="lev-pos-badge ${pos.type}">${pos.type==='inverse'?'INV':'LEV'} ×${pos.mult}</span>
+      <div style="flex:1;"><div style="font-size:11px;">${pos.name}</div><div style="font-size:9px;color:var(--muted);">${fmtN(pos.qty)}주 · 평균 ${fmtN(pos.avgCost)}</div></div>
+      <div style="text-align:right;"><div class="${isUp?'chg-up':'chg-dn'}" style="font-size:11px;">${pnl>=0?'+':''}${fmt(Math.abs(pnl))}</div></div>
+    </div>`;
+  }).join('');
+}
+
 // ═══════════════════════════════════════════════
 // HOLDINGS (right panel)
 // ═══════════════════════════════════════════════
 function renderHoldings() {
   const el = document.getElementById('holdings-list');
+  if (!el) return; // 패널 삭제됨
   const entries = STOCK_DEF.filter(def => state.holdings[def.id] > 0);
-  if (!entries.length) {
-    el.innerHTML = '<div style="color:var(--muted);font-size:11px;padding:6px 0;">보유 중인 종목이 없습니다</div>';
-  } else {
-    el.innerHTML = entries.map(def => {
-      const s = stocks[def.id];
-      const qty = state.holdings[def.id];
-      const val = s.price * qty;
-      const pnl = (s.price - state.avgCost[def.id]) * qty;
-      const chgClass = pnl >= 0 ? 'chg-up' : 'chg-dn';
-      return `<div class="holding-item" onclick="selectStock('${def.id}')">
-        <div>
-          <div class="holding-ticker" style="color:${def.color}">${def.id}</div>
-          <div class="holding-qty">${qty}주</div>
-        </div>
-        <div style="text-align:right;">
-          <div class="holding-val">${fmtMoney(val)}</div>
-          <div class="holding-pnl ${chgClass}">${pnl>=0?'+':''}${fmt(pnl)}</div>
-        </div>
-      </div>`;
-    }).join('');
-  }
-
-  // 레버리지 섹션
-  const levSection = document.getElementById('holdings-lev-section');
-  const levList = document.getElementById('holdings-lev-list');
-  if (!levSection || !levList) return;
-  const keys = Object.keys(state.levHoldings || {});
-  if (!keys.length) {
-    levSection.style.display = 'none';
-  } else {
-    levSection.style.display = 'block';
-    levList.innerHTML = keys.map(key => {
-      const pos = state.levHoldings[key];
-      const cur = latestPrice(pos.stockId);
-      const pct = (cur - pos.avgCost) / pos.avgCost;
-      const dir = pos.type === 'inverse' ? -1 : 1;
-      const pnl = Math.round(pos.avgCost * pos.qty * dir * pct * pos.mult);
-      const isUp = pnl >= 0;
-      return `<div class="lev-pos-item" onclick="selectStock('${pos.stockId}')">
-        <span class="lev-pos-badge ${pos.type}">${pos.type==='inverse'?'INV':'LEV'} ×${pos.mult}</span>
-        <div style="flex:1;">
-          <div style="font-size:11px;">${pos.name}</div>
-          <div style="font-size:9px;color:var(--muted);">${fmtN(pos.qty)}주 · 평균 ${fmtN(pos.avgCost)}</div>
-        </div>
-        <div style="text-align:right;">
-          <div class="${isUp?'chg-up':'chg-dn'}" style="font-size:11px;">${pnl>=0?'+':''}${fmt(Math.abs(pnl))}</div>
-        </div>
-      </div>`;
-    }).join('');
-  }
+  if (!entries.length) { el.innerHTML='<div style="color:var(--muted);font-size:11px;padding:6px 0;">보유 중인 종목이 없습니다</div>'; return; }
+  el.innerHTML = entries.map(def => {
+    const s = stocks[def.id];
+    const qty = state.holdings[def.id];
+    const val = s.price * qty;
+    const pnl = (s.price - state.avgCost[def.id]) * qty;
+    const chgClass = pnl >= 0 ? 'chg-up' : 'chg-dn';
+    return `<div class="holding-item" onclick="selectStock('${def.id}')">
+      <div>
+        <div class="holding-ticker" style="color:${def.color}">${def.id}</div>
+        <div class="holding-qty">${qty}주</div>
+      </div>
+      <div style="text-align:right;">
+        <div class="holding-val">${fmtMoney(val)}</div>
+        <div class="holding-pnl ${chgClass}">${pnl>=0?'+':''}${fmt(pnl)}</div>
+      </div>
+    </div>`;
+  }).join('');
 }
 
 // ═══════════════════════════════════════════════
@@ -2746,10 +2626,18 @@ function updateAssetsData() {
     if (levWrap) levWrap.style.display = 'none';
   }
 
-  // 보유 종목 상세
+  // 보유 종목 상세 — 최근 거래가 맨 위에 오도록 txLog 기준 정렬
+  const recentOrder = {};
+  state.txLog.forEach((tx, i) => {
+    if (!(tx.ticker in recentOrder)) recentOrder[tx.ticker] = i; // 가장 최근(낮은 index=unshift) 기록
+  });
   const segs = STOCK_DEF.filter(def => state.holdings[def.id] > 0).map(def => {
     const val = state.holdings[def.id] * stocks[def.id].price;
     return { id: def.id, name: def.name, val, pct: total > 0 ? val / total * 100 : 0, color: def.color };
+  }).sort((a, b) => {
+    const ra = recentOrder[a.id] ?? 9999;
+    const rb = recentOrder[b.id] ?? 9999;
+    return ra - rb; // 낮을수록 최근
   });
   const levSegs = Object.values(state.levHoldings || {}).map(pos => {
     const cur = latestPrice(pos.stockId);
@@ -2775,12 +2663,15 @@ function updateAssetsData() {
   const logEl = document.getElementById('a-log-body');
   if (logEl) {
     logEl.innerHTML = todayTrades.length
-      ? todayTrades.map(t => `<div class="tl-row"><span class="${t.type==='buy'?'tl-buy':'tl-sell'}">${t.type==='buy'?'매수':'매도'}${t.lev?` ×${t.lev}`:''}</span><span style="color:var(--muted)">${t.ticker}</span><span style="font-family:var(--mono)">${t.qty}주</span><span style="font-family:var(--mono)">${fmtN(t.price)}원</span><span style="font-family:var(--mono);color:${t.type==='buy'?'var(--red)':'var(--green)'}">${t.type==='buy'?'-':'+'}${fmtMoney(t.total)}</span></div>`).join('')
+      ? todayTrades.slice().reverse().map(t => `<div class="tl-row"><span class="${t.type==='buy'?'tl-buy':'tl-sell'}">${t.type==='buy'?'매수':'매도'}${t.lev?` ×${t.lev}`:''}</span><span style="color:var(--muted)">${t.ticker}</span><span style="font-family:var(--mono)">${t.qty}주</span><span style="font-family:var(--mono)">${fmtN(t.price)}원</span><span style="font-family:var(--mono);color:${t.type==='buy'?'var(--red)':'var(--green)'}">${t.type==='buy'?'-':'+'}${fmtMoney(t.total)}</span></div>`).join('')
       : '<div style="color:var(--muted);font-size:11px;padding:8px 0;">오늘 거래 내역이 없습니다</div>';
   }
 
   // 도넛 — 생성 한 번, 이후 데이터만 업데이트 (깜빡임 없음)
   const donutData = [...allSegs, { id: 'CASH', name: '현금', val: state.cash, pct: cashPct, color: '#2a3848' }];
+  // pct를 val 기준으로 재계산 (total이 0이면 현금 100%)
+  const totalVal = donutData.reduce((s, d) => s + d.val, 0) || 1;
+  donutData.forEach(d => { d.pct = d.val / totalVal * 100; });
   const bigItem = donutData.reduce((a, b) => b.val > a.val ? b : a, donutData[0]);
 
   const legendEl = document.getElementById('donut-legend');
@@ -2797,6 +2688,9 @@ function updateAssetsData() {
     donutChart.data.labels = donutData.map(d => d.name);
     donutChart.data.datasets[0].data = donutData.map(d => d.val);
     donutChart.data.datasets[0].backgroundColor = donutData.map(d => d.color);
+    // onHover에서 참조하는 donutData 갱신을 위해 캐시 업데이트
+    donutChart._dalDonutData = donutData;
+    donutChart._dalBigItem = bigItem;
     donutChart.update('none'); // animation 없이 즉시 업데이트
     return;
   }
@@ -2815,18 +2709,27 @@ function updateAssetsData() {
         legend: { display: false },
         tooltip: {
           backgroundColor: '#111820', borderColor: 'rgba(0,200,255,.15)', borderWidth: 1,
-          callbacks: { label: ctx => `${ctx.label}: ${fmtMoney(ctx.raw)} (${(ctx.raw/total*100).toFixed(1)}%)` }
+          callbacks: {
+            label: ctx => {
+              const d = (donutChart._dalDonutData || donutData)[ctx.dataIndex];
+              return `${ctx.label}: ${fmtMoney(ctx.raw)} (${d ? d.pct.toFixed(1) : '0.0'}%)`;
+            }
+          }
         }
       },
       onHover: (e, items) => {
         const cv2 = document.getElementById('donut-cv');
         const cl2 = document.getElementById('donut-cl');
         if (!cv2 || !cl2) return;
-        if (items.length) { const d = donutData[items[0].index]; cv2.textContent = d.pct.toFixed(1)+'%'; cl2.textContent = d.name; }
-        else { cv2.textContent = bigItem.pct.toFixed(0)+'%'; cl2.textContent = bigItem.name; }
+        const curData = donutChart._dalDonutData || donutData;
+        const curBig  = donutChart._dalBigItem  || bigItem;
+        if (items.length) { const d = curData[items[0].index]; cv2.textContent = d.pct.toFixed(1)+'%'; cl2.textContent = d.name; }
+        else { cv2.textContent = curBig.pct.toFixed(0)+'%'; cl2.textContent = curBig.name; }
       }
     }
   });
+  donutChart._dalDonutData = donutData;
+  donutChart._dalBigItem = bigItem;
 }
 
 // 다음날 시작 시 assets 초기화 리셋
@@ -2904,17 +2807,11 @@ function endDay() {
   window._dayEndFired = true;
   sfxDayEnd();
   uploadRanking();
-  // 마스터: 오늘 종가 1개를 history에 추가 후 Realtime DB + Firestore에 저장
-  if (isMaster) {
-    STOCK_DEF.forEach(def => {
-      stocks[def.id].history.push(stocks[def.id].price);
-      if (stocks[def.id].history.length > 500) stocks[def.id].history.shift();
-    });
-    if (window._fbSaveHistory) {
-      const histData = {};
-      STOCK_DEF.forEach(def => { histData[def.id] = stocks[def.id].history; });
-      window._fbSaveHistory(histData).catch(()=>{});
-    }
+  // 마스터: Firestore에 history 저장 (push는 nextDay에서)
+  if (isMaster && window._fbSaveHistory) {
+    const histData = {};
+    STOCK_DEF.forEach(def => { histData[def.id] = stocks[def.id].history; });
+    window._fbSaveHistory(histData).catch(()=>{});
   }
   let count = 5;
   const cdEl = document.getElementById('next-day-countdown');
@@ -2984,10 +2881,15 @@ async function nextDay() {
     }
     stocks[def.id].openPrice = s.price;
     stocks[def.id].prevClose = s.price;
-    stocks[def.id].intradayHist = [{ price: s.price, label:'09:00' }];
-    // history 마지막 값이 어제 종가(s.price)와 다르면 맞춰줌 (차트 연속성 보장)
-    const lastH = s.history[s.history.length - 1];
-    if (lastH !== s.price) stocks[def.id].history.push(s.price);
+    // intradayHist 새날 시작
+    stocks[def.id].intradayHist = [{ price: s.price, label: '09:00' }];
+    // 어제 종가 push (하루 1개)
+    // 직전 history 마지막값과 같으면 skip (스킵 후 중복 방지)
+    const _lastH = stocks[def.id].history[stocks[def.id].history.length - 1];
+    if (_lastH !== s.price) {
+      stocks[def.id].history.push(s.price);
+      if (stocks[def.id].history.length > 500) stocks[def.id].history.shift();
+    }
   });
 
   const newStart = Date.now();
@@ -3019,7 +2921,25 @@ async function nextDay() {
     }
   }
 
-  // 마스터면 항상 틱 재시작 (이전 날 endDay에서 멈춘 틱 재시작)
+  // 마스터: 새날 시작 즉시 histories + intradayHists Firebase 동기화
+  // (일반유저 재접속 시 올바른 데이터 받도록)
+  if (isMaster && window._fbPushPrices) {
+    const priceMap = {}, intradayData = {}, histData = {};
+    STOCK_DEF.forEach(def => {
+      const s = stocks[def.id];
+      priceMap[def.id] = s.price;
+      priceMap[def.id + '_open'] = s.openPrice;
+      priceMap[def.id + '_split'] = s.splitCount || 0;
+      intradayData[def.id] = s.intradayHist;
+      histData[def.id] = s.history;
+    });
+    window._fbPushPrices({
+      prices: priceMap, gameDay, tickCount: 0,
+      splits: {}, intradayHists: intradayData, histories: histData
+    }).catch(()=>{});
+  }
+
+  // 마스터면 항상 틱 재시작
   if (isMaster) {
     clearInterval(tickTimer);
     tickTimer = setInterval(tickPrices, 1500);
@@ -3286,7 +3206,7 @@ function closeSettings() {
   document.getElementById('settings-modal').classList.remove('show');
 }
 function setSettingsTab(tab) {
-  ['audio','save','account','coupon'].forEach(t => {
+  ['audio','save','account'].forEach(t => {
     document.getElementById('stab-'+t).classList.toggle('active', t===tab);
     document.getElementById('spanel-'+t).style.display = t===tab ? 'block' : 'none';
   });
@@ -3301,6 +3221,7 @@ function setSettingsTab(tab) {
       emailEl.textContent = '로그인 안 됨';
       typeEl.textContent  = '';
     }
+    checkAdminPanel();
   }
 }
 
@@ -3363,114 +3284,12 @@ async function doSwitchAccount() {
   }
 }
 
+function checkAdminPanel() {}
+
+
 function doLogoutFromSettings() {
   closeSettings();
   doLogout();
-}
-
-// ── 치트 상태 ──
-let cheatActive = false;
-
-function activateCheat() {
-  cheatActive = true;
-  const panel = document.getElementById('cheat-panel');
-  if (!panel) return;
-  panel.style.display = 'block';
-  // 주가 조작 셀렉트 목록 채우기
-  const sel = document.getElementById('cheat-stock-sel');
-  if (sel && sel.options.length === 0) {
-    STOCK_DEF.forEach(def => {
-      const opt = document.createElement('option');
-      opt.value = def.id;
-      opt.textContent = def.name + ' (' + def.id + ')';
-      sel.appendChild(opt);
-    });
-  }
-}
-
-async function doUseCoupon() {
-  const input = document.getElementById('coupon-input');
-  const msgEl = document.getElementById('coupon-msg');
-  const btn   = document.getElementById('coupon-btn');
-  const code  = (input.value || '').trim().toUpperCase();
-
-  msgEl.style.color = 'var(--muted)';
-  if (!code) { msgEl.style.color='var(--red)'; msgEl.textContent = '쿠폰 코드를 입력해주세요.'; return; }
-  if (!currentUser) { msgEl.style.color='var(--red)'; msgEl.textContent = '로그인이 필요합니다.'; return; }
-  if (!window._fbGetCoupon) { msgEl.style.color='var(--red)'; msgEl.textContent = 'Firebase 연결 중...'; return; }
-
-  btn.disabled = true; btn.textContent = '확인 중…';
-  msgEl.textContent = '';
-  try {
-    const coupon = await window._fbGetCoupon(code);
-    if (!coupon) {
-      msgEl.style.color = 'var(--red)'; msgEl.textContent = '❌ 존재하지 않는 쿠폰입니다.';
-      btn.disabled = false; btn.textContent = '🎁 쿠폰 사용하기'; return;
-    }
-    if (coupon.usedBy && coupon.usedBy.includes(currentUser.uid)) {
-      // 이미 사용했어도 치트는 그냥 열어줌 (자기 계정이니까)
-      msgEl.style.color = 'var(--amber)'; msgEl.textContent = '⚠️ 이미 사용한 쿠폰 — 치트 패널 열림';
-      activateCheat();
-      btn.disabled = false; btn.textContent = '🎁 쿠폰 사용하기'; return;
-    }
-    // 사용 처리
-    await window._fbUseCoupon(code, currentUser.uid, coupon);
-    input.value = '';
-    msgEl.style.color = 'var(--purple)';
-    msgEl.textContent = '⚡ 치트 활성화!';
-    showToast('buy', '⚡ CHEAT MODE ON');
-    activateCheat();
-  } catch(e) {
-    msgEl.style.color = 'var(--red)'; msgEl.textContent = '오류: ' + e.message;
-  }
-  btn.disabled = false; btn.textContent = '🎁 쿠폰 사용하기';
-}
-
-// ── 치트: 현금 조작 ──
-function cheatAddCash(sign) {
-  if (!cheatActive) return;
-  const amtEl = document.getElementById('cheat-cash-amount');
-  const msgEl = document.getElementById('cheat-cash-msg');
-  const amt = parseInt(amtEl.value || '0');
-  if (!amt || amt <= 0) { msgEl.style.color='var(--red)'; msgEl.textContent = '금액을 입력해주세요.'; return; }
-  state.cash += sign * amt;
-  if (state.cash < 0) state.cash = 0;
-  refreshUI();
-  autoSave();
-  msgEl.style.color = sign > 0 ? 'var(--red)' : 'var(--green)';
-  msgEl.textContent = (sign > 0 ? '+' : '-') + fmtMoney(amt) + ' 완료 → 현재 ' + fmtMoney(state.cash);
-  showToast('buy', `💰 현금 ${sign>0?'+':'-'}${fmtMoney(amt)}`);
-}
-
-// ── 치트: 주가 조작 ──
-function cheatSetPrice() {
-  if (!cheatActive) return;
-  const sel    = document.getElementById('cheat-stock-sel');
-  const pctEl  = document.getElementById('cheat-price-pct');
-  const msgEl  = document.getElementById('cheat-price-msg');
-  const id     = sel.value;
-  const pct    = parseFloat(pctEl.value || '0');
-  if (!id || isNaN(pct) || pct === 0) { msgEl.style.color='var(--red)'; msgEl.textContent = '종목과 %를 입력해주세요.'; return; }
-  const s = stocks[id];
-  if (!s) return;
-  const before = s.price;
-  s.price = Math.max(1, Math.round(s.price * (1 + pct / 100)));
-  s.openPrice = s.openPrice || before; // openPrice는 유지
-  // intradayHist에 추가
-  s.intradayHist = s.intradayHist || [];
-  s.intradayHist.push({ price: s.price, label: '치트' });
-  refreshUI();
-  if (currentTab === 'trade' && state.currentTicker === id) renderDetail(id);
-  msgEl.style.color = pct > 0 ? 'var(--red)' : 'var(--green)';
-  const def = STOCK_DEF.find(d => d.id === id);
-  msgEl.textContent = `${def.name} ${fmtN(before)} → ${fmtN(s.price)} (${pct>0?'+':''}${pct}%)`;
-  showToast('buy', `📈 ${def.name} 주가 ${pct>0?'+':''}${pct}%`);
-}
-
-function cheatPriceQuick(pct) {
-  if (!cheatActive) return;
-  document.getElementById('cheat-price-pct').value = pct;
-  cheatSetPrice();
 }
 
 function switchToGuest() {
@@ -3900,6 +3719,16 @@ function resetGame() {
 function showLoginScreen() {
   document.getElementById('login-screen').style.display = 'flex';
 }
+function startAsGuest() {
+  hideLoginScreen();
+  currentUser = null;
+  updateHomeLoginBtn(null);
+  hardResetState();
+  const badge = document.getElementById('user-email-display');
+  if (badge) badge.textContent = '게스트';
+  showToast('info', '게스트 모드 — 진행 상황은 저장되지 않습니다');
+  startGame();
+}
 function hideLoginScreen() {
   document.getElementById('login-screen').style.display = 'none';
 }
@@ -3971,7 +3800,7 @@ function initAuth() {
           state.txLog        = data.txLog || [];
           state.watchlist    = data.watchlist || [];
           state.currentTicker = data.currentTicker || null;
-          state.chartPeriod  = data.chartPeriod || 'all';
+          state.chartPeriod  = data.chartPeriod || 30;
           state.chartType    = data.chartType || 'line';
           state.prevDayTotal = data.prevDayTotal || INIT_CASH;
           gameDay = data.gameDay || 1;
