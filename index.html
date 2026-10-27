@@ -801,7 +801,7 @@ body{
 <!-- ── FIREBASE ── -->
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/12.13.0/firebase-app.js";
-import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged }
+import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged, signInAnonymously, updateProfile }
   from "https://www.gstatic.com/firebasejs/12.13.0/firebase-auth.js";
 import { getFirestore, doc, setDoc, getDoc, getDocs, collection, orderBy, query, limit }
   from "https://www.gstatic.com/firebasejs/12.13.0/firebase-firestore.js";
@@ -834,6 +834,11 @@ window._fbSignIn = async (email, pw) => {
   return cred.user;
 };
 window._fbSignOut = () => signOut(auth);
+window._fbSignInAnon = async (name) => {
+  const cred = await signInAnonymously(auth);
+  if (name) await updateProfile(cred.user, { displayName: name });
+  return cred.user;
+};
 window._fbSave = async (uid, data) => {
   await setDoc(doc(db, 'saves', uid), data);
 };
@@ -920,6 +925,12 @@ window._fbWatchMaster = (uid, onBecomeMaster, onLoseMaster) => {
     }
   });
   window._masterUnsub = unsub;
+};
+
+// 마스터 강제 인수 (기존 마스터가 멈췄을 때)
+window._fbForceMaster = async (uid) => {
+  await set(masterRef, { uid, ts: Date.now() });
+  onDisconnect(masterRef).remove();
 };
 
 // 장 시작시간 ref
@@ -1022,12 +1033,14 @@ setTimeout(() => {
     <div class="login-ok"  id="login-ok"></div>
     <div id="fb-status" style="font-family:var(--mono);font-size:9px;color:var(--muted);text-align:center;margin-top:6px;">Firebase 연결 중…</div>
 
+    <input class="login-input" id="guest-name" maxlength="12" placeholder="게스트 이름 (랭킹에 표시, 2~12자)"
+      style="margin-top:14px;" onkeydown="if(event.key==='Enter')startAsGuest()">
     <button onclick="startAsGuest()" id="guest-btn" style="
       width:100%;margin-top:12px;padding:10px;
       background:rgba(0,200,255,.08);border:1px solid rgba(0,200,255,.3);
       border-radius:5px;color:var(--accent);font-family:var(--mono);
       font-size:12px;cursor:pointer;letter-spacing:.5px;
-    ">👻 게스트로 시작 (저장·랭킹 없음)</button>
+    ">👻 게스트로 시작</button>
 
     <button onclick="hideLoginScreen()" style="
       width:100%;margin-top:10px;padding:9px;
@@ -3215,7 +3228,7 @@ function setSettingsTab(tab) {
     const emailEl = document.getElementById('account-email-display');
     const typeEl  = document.getElementById('account-type-display');
     if (currentUser) {
-      emailEl.textContent = currentUser.email || '게스트';
+      emailEl.textContent = currentUser.email || currentUser.displayName || '게스트';
       typeEl.textContent  = currentUser.isAnonymous ? '👻 게스트 계정' : '✓ 로그인됨';
     } else {
       emailEl.textContent = '로그인 안 됨';
@@ -3425,7 +3438,7 @@ async function autoSave() {
     try {
       if (window._fbSaveRanking) {
         const total = getTotalAsset();
-        await window._fbSaveRanking(user.uid, user.email, total, gameDay);
+        await window._fbSaveRanking(user.uid, rankName(user), total, gameDay);
       }
     } catch(e) { console.error('랭킹 업로드 실패:', e); }
   }, 5000); // 5초 디바운스
@@ -3435,7 +3448,7 @@ async function uploadRanking() {
   if (!currentUser || !window._fbSaveRanking) return;
   try {
     const total = getTotalAsset();
-    await window._fbSaveRanking(currentUser.uid, currentUser.email, total, gameDay);
+    await window._fbSaveRanking(currentUser.uid, rankName(currentUser), total, gameDay);
   } catch(e) { console.error('랭킹 업로드 실패:', e); }
 }
 
@@ -3499,7 +3512,7 @@ async function renderRanking() {
             const isMe = r.uid === myUid;
             const pnl = r.pnlPct || 0;
             const cls = pnl >= 0 ? 'chg-up' : 'chg-dn';
-            const emailShort = (r.email || '???').split('@')[0];
+            const emailShort = escHtml((r.email || '???').split('@')[0]);
             return `<div style="display:grid;grid-template-columns:40px 1fr 100px 80px 60px;gap:0;padding:10px 14px;border-bottom:1px solid var(--border);align-items:center;${isMe?'background:rgba(0,200,255,.05);border-left:2px solid var(--accent);':''}" >
               <div style="font-family:var(--mono);font-size:13px;color:${i<3?'var(--amber)':'var(--muted)'};">${medal[i]||i+1}</div>
               <div>
@@ -3719,14 +3732,47 @@ function resetGame() {
 function showLoginScreen() {
   document.getElementById('login-screen').style.display = 'flex';
 }
-function startAsGuest() {
+function cleanName(n) { return (n||'').replace(/[<>&"'`\\]/g,'').trim().slice(0,12); }
+function escHtml(t) { return String(t).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function rankName(user) {
+  if (!user) return '???';
+  if (user.isAnonymous) return '👻' + cleanName(user.displayName || '게스트');
+  return user.email;
+}
+async function startAsGuest() {
+  const name = cleanName(document.getElementById('guest-name').value);
+  if (name.length < 2) { setLoginErr('게스트 이름을 2자 이상 입력해주세요'); return; }
+  const btn = document.getElementById('guest-btn');
+  btn.disabled = true; btn.textContent = '접속 중…';
+  setLoginErr('');
   hideLoginScreen();
-  currentUser = null;
-  updateHomeLoginBtn(null);
   hardResetState();
-  const badge = document.getElementById('user-email-display');
-  if (badge) badge.textContent = '게스트';
-  showToast('info', '게스트 모드 — 진행 상황은 저장되지 않습니다');
+  try {
+    if (!window._fbSignInAnon) throw new Error('Firebase 미연결');
+    const user = await window._fbSignInAnon(name);
+    currentUser = user;
+    try {
+      const data = await window._fbLoad(user.uid);
+      if (data) {
+        state.cash = data.cash ?? INIT_CASH; state.holdings = data.holdings || {};
+        state.avgCost = data.avgCost || {}; state.levHoldings = data.levHoldings || {};
+        state.txLog = data.txLog || []; state.watchlist = data.watchlist || [];
+        state.prevDayTotal = data.prevDayTotal || INIT_CASH; gameDay = data.gameDay || 1;
+        document.getElementById('day-num').textContent = gameDay;
+      }
+    } catch(e) {}
+    document.getElementById('user-email-display').textContent = '👻 ' + name;
+    updateHomeLoginBtn(user);
+    uploadRanking();
+    showToast('buy', '👻 게스트 ' + name + ' 님 환영합니다');
+  } catch(e) {
+    console.warn('게스트 로그인 실패', e);
+    currentUser = null;
+    updateHomeLoginBtn(null);
+    document.getElementById('user-email-display').textContent = '게스트(오프라인)';
+    showToast('err', '게스트 서버 로그인 실패 — 저장·랭킹 없이 진행합니다');
+  }
+  btn.disabled = false; btn.textContent = '👻 게스트로 시작';
   startGame();
 }
 function hideLoginScreen() {
@@ -3738,11 +3784,11 @@ function updateHomeLoginBtn(user) {
   const info = document.getElementById('home-account-info');
   const emailEl = document.getElementById('home-user-email');
   if (user) {
-    btn.innerHTML = '✓&nbsp;&nbsp;' + (user.email?.split('@')[0] || '로그인됨');
+    btn.innerHTML = '✓&nbsp;&nbsp;' + escHtml(user.email?.split('@')[0] || user.displayName || '로그인됨');
     btn.classList.add('logged-in');
     btn.onclick = () => { if(confirm('로그아웃 하시겠습니까?')) doLogout(); };
     info.style.display = 'block';
-    emailEl.textContent = user.email || '';
+    emailEl.textContent = user.email || ((user.displayName || '') + ' (게스트)');
   } else {
     btn.innerHTML = '👤&nbsp;&nbsp;로그인';
     btn.classList.remove('logged-in');
@@ -3925,6 +3971,7 @@ function bootGame() {
     // 가격 구독 (1회만)
     if (window._fbSubscribePrices) {
       window._fbSubscribePrices((data) => {
+        window._lastPriceRecvAt = Date.now();
         if (isMaster) return;
         if (!data || !data.prices) return;
         const elapsed = Date.now() - dayStartTime;
@@ -3997,6 +4044,23 @@ function bootGame() {
       },
       () => stopMasterMode()
     );
+  }
+
+  // 시세 멈춤 감시 — 마스터가 죽었거나 백그라운드로 멈추면 내가 인수
+  window._lastPriceRecvAt = Date.now();
+  if (!window._masterWatchdog) {
+    window._masterWatchdog = setInterval(async () => {
+      if (isMaster || !currentUser || !window._fbForceMaster) return;
+      if (Date.now() - (window._lastPriceRecvAt || 0) < 5000) return;
+      // 여러 명이 동시에 인수하지 않도록 랜덤 지연 후 재확인
+      await new Promise(r => setTimeout(r, Math.random() * 1500));
+      if (isMaster || Date.now() - (window._lastPriceRecvAt || 0) < 5000) return;
+      try {
+        await window._fbForceMaster(currentUser.uid);
+        window._lastPriceRecvAt = Date.now();
+        startMasterMode();
+      } catch (e) {}
+    }, 2000);
   }
 
   // 홈복귀 시 마스터면 틱 즉시 재시작
